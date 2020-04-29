@@ -182,7 +182,8 @@ def find_staves(img, staff_thickness, staff_spacing):
             assert(score[i] >= 0)
     
     # Take rows that are above a certain threshold and skip by one template
-    # Threshold is 90%
+    # Threshold is 80%
+    # Adaptive staff prediction: If a staff line is expected, then decrease confidence threshold
     confidence = 0.8
     threshold = img.shape[1] * staff_thickness
     row = 0
@@ -193,10 +194,12 @@ def find_staves(img, staff_thickness, staff_spacing):
             if len(staff) == 5:
                 staff_positions.append(staff)
                 staff = []
+                confidence = 0.8
             row += staff_spacing - 2
+            if confidence == 0.8:
+                confidence = 0.6
         else:
             row += 1
-    
     return staff_positions
 
 def draw_staff(img, staff, staff_thickness, staff_spacing, color=(255, 0, 0), thickness=None):
@@ -210,16 +213,14 @@ def segment_by_staves(img, staves, staff_thickness, staff_spacing):
     Splits tracks by the staff positions.
     Returns list of tracks, list of track y-offsets
     """
-    imgs = []
-    track_offset = []
+    track_bounds = []
     for staff in staves:
         # Consider two imaginary staff lines above and below to account for notes
         # above and below the staff. (May need to increase this)
         y1 = max(staff[0] - 2*(staff_thickness + staff_spacing), 0)
         y2 = min(staff[-1] + 2*(staff_thickness + staff_spacing), img.shape[0])
-        imgs.append(img[y1:y2])
-        track_offset.append(y1)
-    return imgs, track_offset
+        track_bounds.append( (y1, y2) )
+    return track_bounds
 
 def get_projection(img, start=0, end=-1, axis='X'):
     """
@@ -282,9 +283,9 @@ def get_symbol_horizontal_boundaries(proj, threshold):
 
 def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=False):
     """
-    Returns bounding boxes over all symbols in the image
+    Returns bounding boxes over all symbols in the image.
+    Note that the coordinates are relative so be sure to add the y-offset for multitrack images.
     """
-    staff_noise = staff_thickness * 5
     xproj = get_projection(img, axis='X')
     yproj = get_projection(img, axis='Y')
 
@@ -293,16 +294,13 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
         ax1.set_title("X Projection")
         x = np.arange(0, len(xproj), 1)
         ax1.fill_between(x, xproj)
-        ax1.fill_between(x, 5 * staff_thickness)
-        ax1.fill_between(x, staff_thickness)
         ax2.set_title("Y Projection")
         x = np.arange(0, len(yproj), 1)
         ax2.fill_between(yproj, x)
         ax2.invert_yaxis()
         fig.tight_layout()
-    
-    staff_noise = max(staff_thickness * 5, np.min(xproj))
-    vertical_boundaries = get_symbol_vertical_boundaries(xproj, threshold=2*staff_thickness, noise_offset=staff_noise)
+
+    vertical_boundaries = get_symbol_vertical_boundaries(xproj, threshold=2*staff_thickness, noise_offset=0)
     
     objects = []
 
@@ -503,7 +501,7 @@ def find_vertical_lines(I, staff_thickness, staff_spacing):
                 largest_run = Iv[i, j]
                 xh, xb = (i-largest_run, i)
             
-        if largest_run > 1.5 * staff_spacing: # Ignore this for now? and np.sum(Il[xh, xb])/largest_run > 1/4:
+        if largest_run > 2 * staff_spacing: # Ignore this for now? and np.sum(Il[xh, xb])/largest_run > 1/4:
             potential_vertical_lines.append((j, xh, xb))
 
     # Filter out lines that are within 2/5 staff spacing of one another so that each line returns
@@ -547,11 +545,6 @@ def my_test(path):
     _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
     bin_img = (1 * (gray == 255)).astype(np.uint8)
 
-    # ksize = (7, 7)
-    # kernel = np.zeros(ksize).astype(np.uint8)
-    # for i in range(ksize[1]):
-    #     kernel[ksize[0]//2][i] = 1
-    # gray_vertically_eroded = cv2.erode(gray, kernel, iterations=2)
 
     t1 = time.time()
     staff_thickness, staff_spacing = compute_staff(gray)
@@ -563,27 +556,49 @@ def my_test(path):
     t2 = time.time()
     print("Time taken to find staves in image: {} ms".format(1000*(t2 - t1)))
 
-    # t1 = time.time()
-    # tracks, offsets = segment_by_staves(gray, staves, staff_thickness, staff_spacing)
-    # t2 = time.time()
-    # print("Time taken to segment tracks by their staves: {} ms".format(1000*(t2 - t1)))
+    t1 = time.time()
+    for staff in staves:
+        # draw_staff(img, staff, staff_thickness, staff_spacing, (0,0,255), 1)
+        bin_img = remove_staff(bin_img, staff, staff_thickness)
+    t2 = time.time()
+    print("Time taken to remove staves in image: {} ms".format(1000*(t2 - t1)))
+
+    t1 = time.time()
+    track_bounds = segment_by_staves(gray, staves, staff_thickness, staff_spacing)
+    t2 = time.time()
+    print("Time taken to segment tracks by their staves: {} ms".format(1000*(t2 - t1)))
 
     draw_projection_plots = 0
 
     note_sequence = []
 
-    for staff in staves:
-        # draw_staff(img, staff, staff_thickness, staff_spacing, (0,0,255), 1)
-        bin_img = remove_staff(bin_img, staff, staff_thickness)
+    all_symbols = []
 
-    # note_sequence = algorithm1(img, gray, staves, tracks, offsets, staff_thickness, staff_spacing, draw_projection_plots)
+    t1 = time.time()
+    for staff, track_bound in zip(staves, track_bounds):
+        track = bin_img[track_bound[0]:track_bound[1]]
+        
+        symbols = find_all_symbols(track, staff_thickness, staff_spacing, draw_projection_plots=draw_projection_plots)
+        y_offset = track_bound[0]
 
-    vertical_lines = find_vertical_lines(bin_img, staff_thickness, staff_spacing)
+        for x1, y1, x2, y2 in symbols:
+            all_symbols.append((x1, y1+y_offset, x2, y2+y_offset))
+    
+    t2 = time.time()
+    print("Time taken to bound all symbols with boxes: {} ms".format(1000*(t2 - t1)))
 
-    for line in vertical_lines:
-        cv2.line(img, (line[0], line[1]), (line[0], line[2]), (255,0,0), 2)
+    t1 = time.time()
+    for symbol in all_symbols:
+        x1, y1, x2, y2 = symbol
+        vertical_lines = find_vertical_lines(bin_img[y1:y2, x1:x2], staff_thickness, staff_spacing)
 
-    # print(note_sequence)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
+
+        for line in vertical_lines:
+            cv2.line(img, (line[0]+x1, line[1]+y1), (line[0]+x1, line[2]+y1), (255,0,0), 2)
+    
+    t2 = time.time()
+    print("Time taken to find all vertical lines within symbols: {} ms".format(1000*(t2 - t1)))
 
     cv2.imshow("Gray", gray)
     cv2.imshow("Image", img)
@@ -598,10 +613,10 @@ def my_test(path):
 
 def main():
     # test()
-    # for path in glob.glob("src/*.png"):
-    #     my_test(path)
+    for path in glob.glob("src/*.png"):
+        my_test(path)
     # my_test("src/one_note.png")
-    my_test("src/half_note.png")
+    # my_test("src/half_note.png")
     # my_test("src/ode_to_joy.png")
     # my_test("src/bar_keysig.png")
     # my_test("src/three_bar.png")
