@@ -28,6 +28,7 @@ def advance(n, n_step):
         n = full_step(n)
     return n
 
+# Ignore this.
 def classify(note, staff, clef='treble'):
     """
     note: Center of the note
@@ -53,6 +54,8 @@ def play(note, duration=1):
     fluidsynth.play_Note(note)
     time.sleep(duration)
 
+
+# Start here.
 def read_image(path):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     img = cv2.blur(img, (1, 1))
@@ -61,6 +64,7 @@ def read_image(path):
     img = imutils.resize(img, height=img_shape)
     return img
 
+# Ignore this
 def test():
     fluidsynth.init('sfs/soundfont.sf2', 'alsa')
     img = read_image('src/ode_to_joy.png')
@@ -128,6 +132,9 @@ def test():
     cv2.destroyAllWindows()
 
 def sliding_window_argmax(arr, k):
+    """
+    Given a 1D array arr, computes the index of maximum value of this array.
+    """
     # O(kn)
     max_sum = 0
     max_idx = (-1,-1)
@@ -141,6 +148,14 @@ def sliding_window_argmax(arr, k):
     return max_idx, max_sum
 
 def compute_staff(gray):
+    """
+    Extract staff parameters from input image.
+    Staff parameters are staff width and staff spacing.
+    This is done by creating a histogram of consecutive black an white pixels, and 
+    taking the lengths of black pixels which occur most as staff thickness, and lengths
+    of white pixels which occur most as staff spacing.
+    This algorithm is described in Optical Music Recognition using Projections.
+    """
     # Initialize histograms
     white_hist = np.zeros(gray.shape[0]+1)
     black_hist = np.zeros(gray.shape[0]+1)
@@ -168,11 +183,15 @@ def compute_staff(gray):
     staff_spacing = sliding_window_argmax(white_hist, 1)[0]
     return staff_thickness[0], staff_spacing[1]
 
-def find_staves(img, staff_thickness, staff_spacing):
+def find_staves(I, staff_thickness, staff_spacing):
+    """
+    Given a binary image I, locates the staves in the image.
+    A staff is a list of 5 staff y-positions.
+    """
     staff_positions = []
-    img = (img == 255)
-    # Define the score as the sum of matching pixels
-    # Maintain an array score: sum of scores over all columns of row i
+    img = I
+    # Define the score of a row as the number of matching pixels along all columns of this row
+    # Formally, maintain an array score, where score[i] = sum of scores over all columns of row i
     score = np.zeros(img.shape[0])
     
     # Loop over every pixel
@@ -183,7 +202,8 @@ def find_staves(img, staff_thickness, staff_spacing):
     
     # Take rows that are above a certain threshold and skip by one template
     # Threshold is 80%
-    # Adaptive staff prediction: If a staff line is expected, then decrease confidence threshold
+    # Adaptive staff prediction: If a staff line is expected, then decrease confidence threshold.
+    # This helps reduce staff lines which are left undetected, while also reducing false positives.
     confidence = 0.8
     threshold = img.shape[1] * staff_thickness
     row = 0
@@ -312,11 +332,7 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
     
     return objects
 
-# TODO:
-def segment_beam(symbol, line):
-    pass
-
-# TODO: Comment
+# Ignore this.
 def recognize_isolated_note(img, symbol, staff_thickness, staff_spacing):
     """
     Given a picture of an isolated note, i.e. without beams, computes the y-position of its
@@ -396,6 +412,7 @@ def recognize_isolated_note(img, symbol, staff_thickness, staff_spacing):
     # cv2.imshow('', symbol_img)
     return [((cx, cy), duration)]
 
+# Ignore this.
 def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
     x1, y1, x2, y2 = symbol
     y1 += offset
@@ -406,8 +423,20 @@ def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
     else:
         return recognize_isolated_note(img, (x1, y1, x2, y2), staff_thickness, staff_spacing)
 
+# TODO: Implement
+def match(I, mask):
+    nrows, ncols = I.shape
+    mask_radius = len(mask)//2
+    for i in range():
+        pass
 
 def compute_runs(I, axis='X'):
+    """
+    Given an input binary image I, computes an output image res, where
+    res[i, j] = longest run ending at this pixel.
+    A run is defined as a consecutive sequence of black pixels.
+    If I[i, j] = 1, i.e. represents a white pixel, then res[i, j] = 0
+    """ 
     nrows, ncols = I.shape
     res = np.zeros_like(I)
     if axis == 'X':
@@ -516,6 +545,7 @@ def find_vertical_lines(I, staff_thickness, staff_spacing):
     return vertical_lines
 
 
+# Ignore this.
 def algorithm1(img, gray, staves, tracks, offsets, staff_thickness, staff_spacing, draw_projection_plots):
     note_sequence = []
     t1 = time.time()
@@ -552,7 +582,7 @@ def my_test(path):
     print("Time taken to compute staff dimensions: {} ms".format(1000*(t2 - t1)))
 
     t1 = time.time()
-    staves = find_staves(gray, staff_thickness, staff_spacing)
+    staves = find_staves(bin_img, staff_thickness, staff_spacing)
     t2 = time.time()
     print("Time taken to find staves in image: {} ms".format(1000*(t2 - t1)))
 
