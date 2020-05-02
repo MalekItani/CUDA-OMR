@@ -5,6 +5,7 @@ import glob
 from mingus.midi import fluidsynth
 import matplotlib.pyplot as plt
 import imutils
+import os
 
 BPM = 120
 
@@ -58,11 +59,22 @@ def play(note, duration=1):
 # Start here.
 def read_image(path):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
-    img = cv2.blur(img, (1, 1))
+    # img = cv2.blur(img, (1, 1))
     img_shape = 400
     # img = cv2.resize(img, dsize=(img_shape, int(img_shape/img.shape[1] * img.shape[0])))
     img = imutils.resize(img, height=img_shape)
     return img
+
+def load_dictionary():
+    dictionary = {}
+    for path in glob.glob('templates/*.png'):
+        img = cv2.imread(path)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
+        bin_img = (1 * (gray == 255)).astype(np.uint8)
+        name = os.path.basename(path)[:-4]
+        dictionary[name] = bin_img
+    return dictionary
 
 # Ignore this
 def test():
@@ -267,26 +279,9 @@ def get_projection(img, start=0, end=-1, axis='X'):
         raise Exception("Invalid value for parameter \'axis\'. It should be either \'X\' or \'Y\'.")
     return result
 
-def get_symbol_vertical_boundaries(proj, threshold=0, noise_offset=0):
+def get_interesting_intervals(proj, threshold):
     """
-    Bounds symbols according to their y-positions
-    """
-    boundaries = []
-    i = 0
-    while i < len(proj):
-        if proj[i] < threshold + noise_offset:
-            i += 1
-        else:
-            boundary = (i,)
-            while i < len(proj) and proj[i] >= threshold + noise_offset:
-                i += 1
-            boundary += (i,)
-            boundaries.append(boundary)
-    return boundaries
-
-def get_symbol_horizontal_boundaries(proj, threshold):
-    """
-    Bounds symbols according to their x-positions
+    Returns a list of intervals where proj is greater than some threshold.
     """
     boundaries = []
     i = 0
@@ -320,13 +315,13 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
         ax2.invert_yaxis()
         fig.tight_layout()
 
-    vertical_boundaries = get_symbol_vertical_boundaries(xproj, threshold=2*staff_thickness, noise_offset=0)
+    vertical_boundaries = get_interesting_intervals(xproj, threshold=staff_thickness)
     
     objects = []
 
     for vboundary in vertical_boundaries:
         yproj = get_projection(img[:, vboundary[0]:vboundary[1]], axis='Y')
-        horizontal_boundaries = get_symbol_horizontal_boundaries(yproj, threshold=staff_thickness)
+        horizontal_boundaries = get_interesting_intervals(yproj, threshold=staff_thickness//2)
         for hboundary in horizontal_boundaries:
             objects.append((vboundary[0], hboundary[0], vboundary[1], hboundary[1]))
     
@@ -424,11 +419,40 @@ def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
         return recognize_isolated_note(img, (x1, y1, x2, y2), staff_thickness, staff_spacing)
 
 # TODO: Implement
-def match(I, mask):
+def _match(I, symbol, mask):
+    """
+    Returns the accuracy score and position of a single symbol matched with a template mask.
+    """
+    x1, y1, x2, y2 = symbol
+    mask_height, mask_width = mask.shape
     nrows, ncols = I.shape
-    mask_radius = len(mask)//2
-    for i in range():
-        pass
+    score = 0
+    pos = (-1, -1)
+    
+    max_ratio = 1.4
+    if (x2 - x1) / mask_width <= max_ratio and (y2 - y1) / mask_height <= max_ratio:
+        for i in range(y1, max(y2 - mask_height, y1 + 1) ):
+            for j in range(x1, max(x2 - mask_width, x1 + 1)):
+                tmp = 0
+                for x in range(mask_height):
+                    for y in range(mask_width): 
+                        if i + x < nrows and j + y < ncols:
+                            tmp += (I[i+x, j+y] == mask[x,y])
+                if tmp > score:
+                    score = tmp
+                    pos = (i, j)
+    return score/(mask_height * mask_width), pos
+
+def match_symbol(I, symbol, dictionary):
+    scores = []
+    for name, mask in dictionary.items():
+        score, pos = _match(I, symbol, mask)
+        scores.append( (score, name, pos) )
+    scores.sort(reverse=True)
+    print(scores)
+    if scores[0][0] < 0.5:
+        return '-1', -1
+    return scores[0][1], scores[0][2]
 
 def compute_runs(I, axis='X'):
     """
@@ -571,10 +595,29 @@ def my_test(path):
     print(path)
     img = read_image(path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # _, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
     bin_img = (1 * (gray == 255)).astype(np.uint8)
 
+    staff_thickness, staff_spacing = compute_staff(gray)
+
+    params = {}
+    with open('templates/conf.txt', 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            args = line.split('=')
+            params[args[0]] = int(args[1])
+
+    required_staff_spacing = params['staff_spacing']
+    
+    print("Adjusting image height...")
+    r = required_staff_spacing/staff_spacing
+    
+    adjusted_height = round(r * img.shape[0])
+
+    img = imutils.resize(img, height=adjusted_height)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
+    bin_img = (1 * (gray == 255)).astype(np.uint8)
 
     t1 = time.time()
     staff_thickness, staff_spacing = compute_staff(gray)
@@ -617,15 +660,26 @@ def my_test(path):
     t2 = time.time()
     print("Time taken to bound all symbols with boxes: {} ms".format(1000*(t2 - t1)))
 
+    bw_img = (255 * bin_img).astype(np.uint8)
+
+    t1 = time.time()
+    dictionary = load_dictionary()
+    t2 = time.time()
+    print("Time taken to load the dictionary of templates: {} ms".format(1000*(t2 - t1)))
+
     t1 = time.time()
     for symbol in all_symbols:
         x1, y1, x2, y2 = symbol
-        vertical_lines = find_vertical_lines(bin_img[y1:y2, x1:x2], staff_thickness, staff_spacing)
+        # vertical_lines = find_vertical_lines(bin_img[y1:y2, x1:x2], staff_thickness, staff_spacing)
+
+        symbol_name, coords = match_symbol(bin_img, symbol, dictionary)
+        if symbol_name != '-1':
+            cv2.putText(img, symbol_name, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255))
 
         cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
 
-        for line in vertical_lines:
-            cv2.line(img, (line[0]+x1, line[1]+y1), (line[0]+x1, line[2]+y1), (255,0,0), 2)
+        # for line in vertical_lines:
+        #     cv2.line(img, (line[0]+x1, line[1]+y1), (line[0]+x1, line[2]+y1), (255,0,0), 2)
     
     t2 = time.time()
     print("Time taken to find all vertical lines within symbols: {} ms".format(1000*(t2 - t1)))
@@ -640,16 +694,29 @@ def my_test(path):
     for note in note_sequence:
         play(note[0], note[1])
     cv2.destroyAllWindows()
+    return staff_spacing, all_symbols, bw_img
+
+def create_samples():
+    staff_spacing, symbols, bw_img = my_test("src/samples.png")
+    
+    for symbol in symbols:
+        x1, y1, x2, y2 = symbol
+        cv2.imwrite('templates/symbol{}.png'.format(symbol), bw_img[y1:y2, x1:x2])
+    
+    with open('templates/conf.txt', 'w') as outf:
+        outf.write("staff_spacing={}".format(staff_spacing))
 
 def main():
+    # create_samples()
     # test()
     for path in glob.glob("src/*.png"):
-        my_test(path)
-    # my_test("src/one_note.png")
+        if path != "src/samples.png":
+            my_test(path)
+    # my_test("src/samples.png")
     # my_test("src/half_note.png")
     # my_test("src/ode_to_joy.png")
     # my_test("src/bar_keysig.png")
-    # my_test("src/three_bar.png")
+    # my_test("src/treble_clef.png")
 
 if __name__ == "__main__":
     main()
