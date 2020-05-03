@@ -326,7 +326,6 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
     
     return objects
 
-# Ignore this.
 def recognize_isolated_note(img, symbol, staff_thickness, staff_spacing):
     """
     Given a picture of an isolated note, i.e. without beams, computes the y-position of its
@@ -383,28 +382,32 @@ def recognize_isolated_note(img, symbol, staff_thickness, staff_spacing):
 
     return [(name, (cx, cy))]
 
-# Ignore this.
-def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
-    x1, y1, x2, y2 = symbol
-    y1 += offset
-    y2 += offset
-    dx = x2 - x1
-    if dx > 3*staff_spacing:
-        return []
-    else:
-        return recognize_isolated_note(img, (x1, y1, x2, y2), staff_thickness, staff_spacing)
-
-# TODO: Implement
 def _match_and_slide(I, symbol, mask, bound=False):
     """
-    Returns the accuracy score and position of a single symbol matched with a template mask.
+    Given an input binary image I, a bounding rectangle symbol, and a template mask, find the
+    most probably position where this template could be in this symbol by sliding this 
+    template accross the symbol and counting the number of matching pixels.
+    A score is assigned equal to the number of matching pixels / number of pixels in the templat 
     """
+    # Initialize symbol rectangle bounds and mask rectangle bounds
     x1, y1, x2, y2 = symbol
     mask_height, mask_width = mask.shape
     nrows, ncols = I.shape
+
+    # Initialize score and position variables
     score = 0
     pos = (-1, -1)
 
+    # For most templates, the width and height should be a bit close to the symbol. 
+    # However, for empty and filled note templates, these could be found anywhere within
+    # the symbol. In order to control this behavior, we use the bound parameter.
+    # If bound is set, we do the following:
+    # In order to speed things up, only consider symbols whose height and width are close
+    # to the height and width of the mask. This avoids trying to slide very small masks
+    # over large symbols, which obviously do not match.
+
+    # Find the ratio of symbol width to mask width and ration of symbol height to mask height
+    # If these ratios are too large or too small, then don't try proceed.
     rx = (x2 - x1) / mask_width
     ry = (y2 - y1) / mask_height
 
@@ -412,7 +415,13 @@ def _match_and_slide(I, symbol, mask, bound=False):
 
     min_ratio = 0.8
     max_ratio = 1.2
+
+    # If bound is not set, then we proceed normally:
     if not bound or (bound and in_range(rx, min_ratio, max_ratio) and in_range(ry, min_ratio, max_ratio)):
+        # Loop over every pixel in the symbol to choose the top left corner (i, j) and try matching.
+        # From experimentation, it helps to consider at the least the first pixel, even if
+        # the bounds of the template exceed the bounds of the symbol. Usually, they don't exceed
+        # exceed them by too much if there really is a match.
         for i in range(y1, max(y2 - mask_height, y1 + 1)):
             for j in range(x1, max(x2 - mask_width, x1 + 1)):
                 tmp = 0
@@ -420,19 +429,28 @@ def _match_and_slide(I, symbol, mask, bound=False):
                     for y in range(mask_width): 
                         if i + x < nrows and j + y < ncols:
                             tmp += (I[i+x, j+y] == mask[x,y])
-                if tmp > score:
+                
+                if tmp > score:    
                     score = tmp
-                    pos = (j + mask_width//2, i + mask_height//2)
+                    pos = (j + mask_width//2, i + mask_height//2) # Pos should be the exact center of where the match takes place
     
     return score/(mask_height * mask_width), pos
 
 def _match_all(I, symbol, mask, confidence):
+    """
+    Same as _match_and_slide, but returns all possible locations of a template in the symbol,
+    whose score exceeds a certain confidence level. This is useful when trying to find filled
+    notes (which may be many) in a collection beam of beamed notes, which we can't further segment.
+    """
     x1, y1, x2, y2 = symbol
     mask_height, mask_width = mask.shape
     nrows, ncols = I.shape
     pos = []
     i = y1
+    # We loop over (i, j) as discussed in _match_and_slide.
     while i < max(y2 - mask_height, y1 + 1):
+        # If we do find a match, then we set a flag, so that we know we should jump by one 
+        # whole mask_height in the next iteration of i
         flag = 0
         j = x1
         while j < max(x2 - mask_width, x1 + 1):
@@ -442,6 +460,8 @@ def _match_all(I, symbol, mask, confidence):
                     if i + x < nrows and j + y < ncols:
                         score += (I[i+x, j+y] == mask[x,y])
             score /= (mask_height * mask_width)
+            # Check if the score is above the confidence to add it to the list of possible
+            # locations of the mask.
             if score >= confidence:
                 pos.append((j + mask_width//2, i + mask_height//2))
                 j += mask_width
@@ -455,7 +475,15 @@ def _match_all(I, symbol, mask, confidence):
     return pos
 
 def match_symbol(I, symbol, dictionary, staff_thickness, staff_spacing, filled_confidence=0.8, empty_confidence=0.7, symbol_confidence=0.6):
-
+    """
+    Given a binary image I, a bounding rectangle symbol, a collection of templates dictionary,
+    try to recognize the musical character(s) found in symbol.
+    Each recognition is given a score and one with the highest score is chosen, only if its score
+    exceeds a certain confidence threshold.
+    Returns a list of (name, pos) tuples representing the character name and character position, for
+    every character found in the symbol.
+    """
+    # First try matching this symbol to all templates except for the filled and empty notes.
     scores = []
     for name, mask in dictionary.items():
         if name == 'filled_note' or name == 'empty_note':
@@ -467,17 +495,25 @@ def match_symbol(I, symbol, dictionary, staff_thickness, staff_spacing, filled_c
     if scores[0][0] >= symbol_confidence:
         return [(scores[0][1], scores[0][2])]
 
+    # If no template matches, then try finding empty note heads in the symbol.
     score_empty, pos = _match_and_slide(I, symbol, dictionary['empty_note'])
     print(score_empty)
     if score_empty >= empty_confidence:
         return [('half_note', pos)]
 
+    # If no empty note head are found, then try finding filled note heads in the symbol.
     pos = _match_all(I, symbol, dictionary['filled_note'], confidence=filled_confidence)
+
+    # If multiple filled note heads are found, then this symbol is a beamed collection of notes,
+    # return each one individually without any further processing. Otherwise, then this is only
+    # a single note head, which may either be a quarter note or an eigthth note, so do some more
+    # processing to figure it out.
+    # Note that if no notes are detected, then this symbol doesn't represent anything important,
+    # and an empty list will be returned. 
     if len(pos) == 1:
         return recognize_isolated_note(I, symbol, staff_thickness, staff_spacing)
     else:
         return [('eighth_note', c) for c in pos]
-    
 
 def compute_runs(I, axis='X'):
     """
@@ -593,27 +629,6 @@ def find_vertical_lines(I, staff_thickness, staff_spacing):
 
     return vertical_lines
 
-# Ignore this.
-def algorithm1(img, gray, staves, tracks, offsets, staff_thickness, staff_spacing, draw_projection_plots):
-    note_sequence = []
-    t1 = time.time()
-    for staff, track, y_offset in zip(staves, tracks, offsets):
-        symbols = find_all_symbols(track, staff_thickness, staff_spacing, draw_projection_plots=draw_projection_plots)
-        for x1, y1, x2, y2 in symbols:
-            cv2.rectangle(img, (x1, y1+y_offset), (x2, y2+y_offset), (0,255,0), 2)
-        for symbol in symbols:
-            notes = recognize_note_symbol(gray, symbol, y_offset, staff_thickness, staff_spacing)
-            for ((cx, cy), duration) in notes:
-                cv2.circle(img, (cx, cy), 1, (0,0,255))
-                cv2.putText(img, str(duration), (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255))
-                note = classify2((cx, cy), staff, staff_thickness, staff_spacing)
-                note_sequence.append((note, duration))
-
-    t2 = time.time()
-    print("Time taken to find and classify all symbols with boxes: {} ms".format(1000*(t2 - t1)))
-    return note_sequence
-
-
 template_path = 'templates'
 dictionary = load_dictionary(template_path)
 
@@ -670,36 +685,46 @@ def my_test(path):
 
     draw_projection_plots = 0
 
-    note_sequence = []
-
     all_symbols = []
 
     t1 = time.time()
-    for staff, track_bound in zip(staves, track_bounds):
+    for track_id, (staff, track_bound) in enumerate(zip(staves, track_bounds)):
         track = bin_img[track_bound[0]:track_bound[1]]
         
         symbols = find_all_symbols(track, staff_thickness, staff_spacing, draw_projection_plots=draw_projection_plots)
         y_offset = track_bound[0]
 
         for x1, y1, x2, y2 in symbols:
-            all_symbols.append((x1, y1+y_offset, x2, y2+y_offset))
+            all_symbols.append( ((x1, y1+y_offset, x2, y2+y_offset), track_id) )
     
     t2 = time.time()
     print("Time taken to bound all symbols with boxes: {} ms".format(1000*(t2 - t1)))
 
+    note_sequences = [[]] * len(staves)
+
     t1 = time.time()
-    for symbol in all_symbols:
+    for symbol, track_id in all_symbols:
         x1, y1, x2, y2 = symbol
         
         characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
-        print(characters)
+
         for (name, pos) in characters:
             cv2.putText(img, name, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255))
+            note_sequences[track_id].append(name)
 
         cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
     
     t2 = time.time()
     print("Time taken to find classify all symbols: {} ms".format(1000*(t2 - t1)))
+
+    # for i in range(len(note_sequences)):
+    #     for name in note_sequences[i]:
+    #         Initialize a note object from note_sequences
+    #         Apply note's effect to track object
+    #         Maybe put the below in the note object class
+    #         if name contains 'note':
+    #             note = classify2((cx, cy), staff, staff_thickness, staff_spacing)
+    #             note_sequence.append((note, duration))
 
     cv2.imshow("Gray", gray)
     cv2.imshow("Image", img)
@@ -708,8 +733,6 @@ def my_test(path):
     if draw_projection_plots:
         plt.show()
 
-    for note in note_sequence:
-        play(note[0], note[1])
     cv2.destroyAllWindows()
 
 def create_samples():
