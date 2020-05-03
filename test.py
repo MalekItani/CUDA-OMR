@@ -55,7 +55,6 @@ def play(note, duration=1):
     fluidsynth.play_Note(note)
     time.sleep(duration)
 
-
 # Start here.
 def read_image(path):
     img = cv2.imread(path, cv2.IMREAD_COLOR)
@@ -65,9 +64,9 @@ def read_image(path):
     img = imutils.resize(img, height=img_shape)
     return img
 
-def load_dictionary():
+def load_dictionary(template_path='templates'):
     dictionary = {}
-    for path in glob.glob('templates/*.png'):
+    for path in glob.glob('{}/*.png'.format(template_path)):
         img = cv2.imread(path)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
@@ -374,38 +373,15 @@ def recognize_isolated_note(img, symbol, staff_thickness, staff_spacing):
 
     # Check if it is more wide than it is high
     if dx > dy:
-        duration = DURATION_WHOLE_NOTE
+        name = 'whole_note'
     else:
         # Check if the position of the max lies near the center for the note to be flagged.
         if x_proj_argmax >= len(x_proj)//3 and x_proj_argmax <= 2*len(x_proj)//3:
-            duration = DURATION_EIGHTH_NOTE
+            name = 'eighth_note'
         else:
-            x_offset = staff_thickness
-            y_offset = staff_thickness
-            
-            symbol_notehead_size = staff_spacing
+            name = 'quarter_note'
 
-            roi = [[x_offset, symbol_img.shape[1] - x_offset], [symbol_img.shape[0] - y_offset - symbol_notehead_size, symbol_img.shape[0]-y_offset]]
-
-            if x_proj_argmax < len(x_proj)//2:
-                roi[1] = [y_offset, y_offset + symbol_notehead_size]
-
-            y_proj = get_projection(symbol_img[:,roi[0][0]:roi[0][1]], start = roi[1][0], end=roi[1][1], axis='Y')
-            num_blacks = np.sum(y_proj)
-            
-            if num_blacks >= (dx - 2 * x_offset) * (symbol_notehead_size - y_offset) * 0.9:
-                duration = DURATION_QUARTER_NOTE
-            else:
-                duration = DURATION_HALF_NOTE
-
-            # print((roi[0][0], roi[1][1]))
-            # print((roi[0][1], roi[1][0]))
-
-            # cv2.rectangle(symbol_img, (roi[0][0], roi[1][0]), (roi[0][1], roi[1][1]), (255,255,255), -1)
-            # cv2.rectangle(symbol_img, (0, symbol_img.shape[0]), (symbol_img.shape[1], symbol_img.shape[0] - staff_spacing), (255,255,255), -1)
-
-    # cv2.imshow('', symbol_img)
-    return [((cx, cy), duration)]
+    return [(name, (cx, cy))]
 
 # Ignore this.
 def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
@@ -419,7 +395,7 @@ def recognize_note_symbol(img, symbol, offset, staff_thickness, staff_spacing):
         return recognize_isolated_note(img, (x1, y1, x2, y2), staff_thickness, staff_spacing)
 
 # TODO: Implement
-def _match(I, symbol, mask):
+def _match_and_slide(I, symbol, mask, bound=False):
     """
     Returns the accuracy score and position of a single symbol matched with a template mask.
     """
@@ -428,10 +404,16 @@ def _match(I, symbol, mask):
     nrows, ncols = I.shape
     score = 0
     pos = (-1, -1)
-    
-    max_ratio = 1.4
-    if (x2 - x1) / mask_width <= max_ratio and (y2 - y1) / mask_height <= max_ratio:
-        for i in range(y1, max(y2 - mask_height, y1 + 1) ):
+
+    rx = (x2 - x1) / mask_width
+    ry = (y2 - y1) / mask_height
+
+    in_range = lambda x, a, b: a <= x and x <= b
+
+    min_ratio = 0.8
+    max_ratio = 1.2
+    if not bound or (bound and in_range(rx, min_ratio, max_ratio) and in_range(ry, min_ratio, max_ratio)):
+        for i in range(y1, max(y2 - mask_height, y1 + 1)):
             for j in range(x1, max(x2 - mask_width, x1 + 1)):
                 tmp = 0
                 for x in range(mask_height):
@@ -440,19 +422,62 @@ def _match(I, symbol, mask):
                             tmp += (I[i+x, j+y] == mask[x,y])
                 if tmp > score:
                     score = tmp
-                    pos = (i, j)
+                    pos = (j + mask_width//2, i + mask_height//2)
+    
     return score/(mask_height * mask_width), pos
 
-def match_symbol(I, symbol, dictionary):
+def _match_all(I, symbol, mask, confidence):
+    x1, y1, x2, y2 = symbol
+    mask_height, mask_width = mask.shape
+    nrows, ncols = I.shape
+    pos = []
+    i = y1
+    while i < max(y2 - mask_height, y1 + 1):
+        flag = 0
+        j = x1
+        while j < max(x2 - mask_width, x1 + 1):
+            score = 0
+            for x in range(mask_height):
+                for y in range(mask_width):
+                    if i + x < nrows and j + y < ncols:
+                        score += (I[i+x, j+y] == mask[x,y])
+            score /= (mask_height * mask_width)
+            if score >= confidence:
+                pos.append((j + mask_width//2, i + mask_height//2))
+                j += mask_width
+                flag = 1
+            else:
+                j += 1
+        if flag:
+            i += mask_height
+        else:
+            i += 1
+    return pos
+
+def match_symbol(I, symbol, dictionary, staff_thickness, staff_spacing, filled_confidence=0.8, empty_confidence=0.7, symbol_confidence=0.6):
+
     scores = []
     for name, mask in dictionary.items():
-        score, pos = _match(I, symbol, mask)
+        if name == 'filled_note' or name == 'empty_note':
+            continue
+        score, pos = _match_and_slide(I, symbol, mask, bound=1)
         scores.append( (score, name, pos) )
     scores.sort(reverse=True)
     print(scores)
-    if scores[0][0] < 0.5:
-        return '-1', -1
-    return scores[0][1], scores[0][2]
+    if scores[0][0] >= symbol_confidence:
+        return [(scores[0][1], scores[0][2])]
+
+    score_empty, pos = _match_and_slide(I, symbol, dictionary['empty_note'])
+    print(score_empty)
+    if score_empty >= empty_confidence:
+        return [('half_note', pos)]
+
+    pos = _match_all(I, symbol, dictionary['filled_note'], confidence=filled_confidence)
+    if len(pos) == 1:
+        return recognize_isolated_note(I, symbol, staff_thickness, staff_spacing)
+    else:
+        return [('eighth_note', c) for c in pos]
+    
 
 def compute_runs(I, axis='X'):
     """
@@ -492,10 +517,10 @@ def remove_staff(I, staff, staff_thickness):
     Iv = compute_runs(I, axis='Y')
     
     # For every staff y-position, go over all columns and remove the run if 
-    # its length is <= staff_thickness + 2
+    # its length is <= staff_thickness + 3
     for x in staff:
+        x += 1
         for j in range(ncols):
-            
             if Iv[x, j] ==  0:
                 continue
 
@@ -503,7 +528,7 @@ def remove_staff(I, staff, staff_thickness):
             while x2 < nrows and Iv[x2, j] > 0:
                 x2 += 1
             
-            if Iv[x2-1, j] <= staff_thickness + 2:
+            if Iv[x2-1, j] <= staff_thickness + 3:
                 x1 = x2 - Iv[x2-1, j]
                 while x1 < x2:
                     res[x1, j] = 1
@@ -568,7 +593,6 @@ def find_vertical_lines(I, staff_thickness, staff_spacing):
 
     return vertical_lines
 
-
 # Ignore this.
 def algorithm1(img, gray, staves, tracks, offsets, staff_thickness, staff_spacing, draw_projection_plots):
     note_sequence = []
@@ -589,6 +613,9 @@ def algorithm1(img, gray, staves, tracks, offsets, staff_thickness, staff_spacin
     print("Time taken to find and classify all symbols with boxes: {} ms".format(1000*(t2 - t1)))
     return note_sequence
 
+
+template_path = 'templates'
+dictionary = load_dictionary(template_path)
 
 def my_test(path):
     fluidsynth.init('sfs/soundfont.sf2', 'alsa')
@@ -660,29 +687,19 @@ def my_test(path):
     t2 = time.time()
     print("Time taken to bound all symbols with boxes: {} ms".format(1000*(t2 - t1)))
 
-    bw_img = (255 * bin_img).astype(np.uint8)
-
-    t1 = time.time()
-    dictionary = load_dictionary()
-    t2 = time.time()
-    print("Time taken to load the dictionary of templates: {} ms".format(1000*(t2 - t1)))
-
     t1 = time.time()
     for symbol in all_symbols:
         x1, y1, x2, y2 = symbol
-        # vertical_lines = find_vertical_lines(bin_img[y1:y2, x1:x2], staff_thickness, staff_spacing)
-
-        symbol_name, coords = match_symbol(bin_img, symbol, dictionary)
-        if symbol_name != '-1':
-            cv2.putText(img, symbol_name, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255))
+        
+        characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
+        print(characters)
+        for (name, pos) in characters:
+            cv2.putText(img, name, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255))
 
         cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
-
-        # for line in vertical_lines:
-        #     cv2.line(img, (line[0]+x1, line[1]+y1), (line[0]+x1, line[2]+y1), (255,0,0), 2)
     
     t2 = time.time()
-    print("Time taken to find all vertical lines within symbols: {} ms".format(1000*(t2 - t1)))
+    print("Time taken to find classify all symbols: {} ms".format(1000*(t2 - t1)))
 
     cv2.imshow("Gray", gray)
     cv2.imshow("Image", img)
@@ -694,29 +711,62 @@ def my_test(path):
     for note in note_sequence:
         play(note[0], note[1])
     cv2.destroyAllWindows()
-    return staff_spacing, all_symbols, bw_img
 
 def create_samples():
-    staff_spacing, symbols, bw_img = my_test("src/samples.png")
+    img = read_image('src/samples.png')
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, gray = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
+    bin_img = (1 * (gray == 255)).astype(np.uint8)
     
-    for symbol in symbols:
+    staff_thickness, staff_spacing = compute_staff(gray)
+    staves = find_staves(bin_img, staff_thickness, staff_spacing)
+
+    for staff in staves:
+        # draw_staff(img, staff, staff_thickness, staff_spacing, (0,0,255), 1)
+        bin_img = remove_staff(bin_img, staff, staff_thickness)
+
+    track_bounds = segment_by_staves(gray, staves, staff_thickness, staff_spacing)
+
+    all_symbols = []
+
+    for staff, track_bound in zip(staves, track_bounds):
+        track = bin_img[track_bound[0]:track_bound[1]]
+        
+        symbols = find_all_symbols(track, staff_thickness, staff_spacing)
+        y_offset = track_bound[0]
+
+        for x1, y1, x2, y2 in symbols:
+            all_symbols.append((x1, y1+y_offset, x2, y2+y_offset))
+
+    for symbol in all_symbols:
         x1, y1, x2, y2 = symbol
-        cv2.imwrite('templates/symbol{}.png'.format(symbol), bw_img[y1:y2, x1:x2])
+        sym = (255 * bin_img[y1:y2, x1:x2]).astype(np.uint8)
+        cv2.imshow('symbol', sym)
+        cv2.waitKey(100)
+        name = input('What do you want to call this? ')
+        if name == 'skip':
+            continue
+        else:
+            cv2.imwrite('{}/{}.png'.format(template_path, name), sym, [cv2.IMWRITE_PNG_COMPRESSION, 0])
     
-    with open('templates/conf.txt', 'w') as outf:
+    with open('{}/conf.txt'.format(template_path), 'w') as outf:
         outf.write("staff_spacing={}".format(staff_spacing))
+
+    cv2.imshow("Image", img)
+    cv2.imshow("Bin Image", (255 * bin_img).astype(np.uint8) )
+    cv2.waitKey(0)
 
 def main():
     # create_samples()
     # test()
-    for path in glob.glob("src/*.png"):
-        if path != "src/samples.png":
-            my_test(path)
+    # for path in glob.glob("src/*.png"):
+    #     my_test(path)
     # my_test("src/samples.png")
     # my_test("src/half_note.png")
     # my_test("src/ode_to_joy.png")
-    # my_test("src/bar_keysig.png")
-    # my_test("src/treble_clef.png")
+    my_test("src/bar_keysig.png")
+    # my_test("src/bass_clef.png")
+    # my_test("src/three_bar.png")
 
 if __name__ == "__main__":
     main()
