@@ -285,7 +285,7 @@ def get_interesting_intervals(proj, threshold):
     boundaries = []
     i = 0
     while i < len(proj):
-        if proj[i] < threshold or proj[i] >= np.max(proj) - 1:
+        if proj[i] < threshold:
             i += 1
         else:
             boundary = (i,)
@@ -322,6 +322,7 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
         yproj = get_projection(img[:, vboundary[0]:vboundary[1]], axis='Y')
         horizontal_boundaries = get_interesting_intervals(yproj, threshold=staff_thickness//2)
         for hboundary in horizontal_boundaries:
+            print(hboundary)
             objects.append((vboundary[0], hboundary[0], vboundary[1], hboundary[1]))
     
     return objects
@@ -705,7 +706,7 @@ def my_test(path):
     t1 = time.time()
     for symbol, track_id in all_symbols:
         x1, y1, x2, y2 = symbol
-        
+
         characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
 
         for (name, pos) in characters:
