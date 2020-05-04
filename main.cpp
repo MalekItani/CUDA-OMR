@@ -1,5 +1,34 @@
-# include<bits/stdc++.h>
+#include <iostream>
+#include <set>
+#include <algorithm>
+#include <vector>
+#include <map>
+#include <cmath>
+#include <string>
+#include <unordered_map>
+#include <stack>
+#include <iomanip>
+#include <fstream>
+#include <cstring>
+#include <list>
+#include <map>
+#include <bitset>
+#include <queue>
+#include <functional>  
+#include <numeric>      
+#include <assert.h>
+#include <unordered_set>
+#include <array>
+#include <stdio.h>
+#include<complex>
 using namespace std;
+/*
+
+
+Functions not implemented or partially implemented
+-find_all_symbols
+-recognize isolated symbol
+*/
 
 int sliding_window_argmax(vector<int>& a, int k)
 {
@@ -58,20 +87,6 @@ pair<int, int> computeStaff(vector<vector<unsigned char>>& image)
 	return ans;
 }
 
-__global__ void colorToGrayscaleConversion(unsigned char* Pout, unsigned char* Pin, int width, int height, int numChannels)
-{
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	if (x < width && y < height) {
-		int grayOffset = y * width + x;
-		int rgbOffset = grayOffset * numChannels;
-		unsigned char r = Pin[rgbOffset];
-		unsigned char g = Pin[rgbOffset + 1];
-		unsigned char b = Pin[rgbOffset + 2];
-		Pout[grayOffset] = 0.21f * r + 0.71f * g + 0.07f * b;
-	}
-}
-
 vector<vector<int>> find_staves(vector<vector<unsigned char>>& image, int staff_thickness, int staff_spacing)
 {
 	int numRows = image.size(), numCols = 0;
@@ -125,7 +140,6 @@ vector<int> getprojection(vector<vector<unsigned char>>& image, int start = 0, i
 {
 	int numRows = image.size(), numCols = 0;
 	if (numRows > 0)numCols = image[0].size();
-	vector<int> result(end - start, 0);
 	if (end == -1)
 	{
 		if (axis == 'X')
@@ -134,6 +148,7 @@ vector<int> getprojection(vector<vector<unsigned char>>& image, int start = 0, i
 		}
 		else end = numRows;
 	}
+	vector<int> result(end - start, 0);
 	if (axis == 'X')
 	{
 		for (int j = start; j <= end; j++)
@@ -163,27 +178,7 @@ vector<int> getprojection(vector<vector<unsigned char>>& image, int start = 0, i
 	return result;
 }
 
-vector<vector<int>> get_symbol_vertical_boundaries(vector<int> proj, int threshold = 0, int noise_offset = 0)
-{
-	vector<vector<int>> boundaries;
-	for (int i = 0; i < proj.size(); i++)
-	{
-		if (proj[i] < threshold + noise_offset) i++;
-		else
-		{
-			vector<int> boundary = { i };
-			while (i < proj.size() && proj[i] >= threshold + noise_offset)
-			{
-				i++;
-			}
-			boundary[0] += i;
-			boundaries.push_back(boundary);
-		}
-	}
-	return boundaries;
-}
-
-vector<vector<int>> get_symbol_horizontal_boundaries(vector<int> proj, int threshold = 0)
+vector<vector<int>> get_interesting_intervals(vector<int> proj, int threshold)
 {
 	vector<vector<int>> boundaries;
 	int max1 = *max_element(proj.begin(), proj.end());
@@ -202,6 +197,15 @@ vector<vector<int>> get_symbol_horizontal_boundaries(vector<int> proj, int thres
 		}
 	}
 	return boundaries;
+}
+
+void find_all_symbols(vector<vector<unsigned char>>& image, int staff_thickness, int staff_spacing) {
+	vector<int>xproj = getprojection(image, 0, -1, 'X');
+	vector<int>yproj = getprojection(image, 0, -1, 'Y');
+	auto vertical_boundaries = get_interesting_intervals(xproj, staff_thickness);
+	for (auto vboundary : vertical_boundaries) {
+		//tricky !!!
+	}
 }
 
 vector<vector<int>> computeRuns(vector<vector<unsigned char>>& image, char axis) {
@@ -339,6 +343,77 @@ vector<vector<vector<unsigned char>>> transformColoredImageToVector(unsigned cha
 	return res;
 }
 
+//cuda kernels:
+__global__ void colorToGrayscaleConversion(unsigned char* Pout, unsigned char* Pin, int width, int height, int numChannels)
+{
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	if (x < width && y < height) {
+		int grayOffset = y * width + x;
+		int rgbOffset = grayOffset * numChannels;
+		unsigned char r = Pin[rgbOffset];
+		unsigned char g = Pin[rgbOffset + 1];
+		unsigned char b = Pin[rgbOffset + 2];
+		Pout[grayOffset] = 0.21f * r + 0.71f * g + 0.07f * b;
+	}
+}
+
+
+__global__ void match_and_slide(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output, bool bound) {
+
+	//output is of the size of th bounding box
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
+	int score = 0;
+	int pos[2] = { -1,-2 };
+	double rx = (x2 - x1 + 0.0) / mask_width, ry = (y2 - y1 + 0.0) / mask_height;
+	double min_ratio = 0.8, max_ratio = 1.2;
+
+	if (!bound || (bound && rx >= min_ratio && rx <= max_ratio && ry >= min_ratio && ry <= max_ratio)) {
+		int col = x + x1;
+		int row = y + y1;
+		int colbound, rowbound;
+		if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
+		else rowbound = y1 + 1;
+		if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
+		else colbound = x1 + 1;
+		if (col <= colbound && row <= rowbound) {
+			int tmp = 0;
+			for (int x3 = 0; x3 < mask_width; x3++) {
+				for (int y3 = 0; y3 < mask_hight; y3++) {
+					if (row + y3 < numRows && col + x3 <= numCols)
+						tmp += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
+				}
+			}
+			output[y * (y2 - y1 + 1) + x] = tmp;
+		}
+	}
+}
+
+__global__ void match_all(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output) {
+
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
+	int col = x + x1;
+	int row = y + y1;
+	int colbound, rowbound;
+	if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
+	else rowbound = y1 + 1;
+	if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
+	else colbound = x1 + 1;
+	if (col < colbound && row < rowbound) {
+		int score = 0;
+		for (int x3 = 0; x3 < mask_width; x3++) {
+			for (int y3 = 0; y3 < mask_hight; y3++) {
+				if (row + y3 < numRows && col + x3 <= numCols)
+					score += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
+			}
+		}
+		output[y * (y2 - y1 + 1) + x] = tmp;
+	}
+}
 
 int main()
 {
