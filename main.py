@@ -2,20 +2,9 @@ import cv2
 import numpy as np
 import time
 import glob
-from mingus.midi import fluidsynth
 import matplotlib.pyplot as plt
 import imutils
 import os
-
-BPM = 120
-
-DURATION_QUARTER_NOTE = 60/BPM
-
-DURATION_EIGHTH_NOTE = DURATION_QUARTER_NOTE/2
-DURATION_SIXTEENTH_NOTE = DURATION_EIGHTH_NOTE/2
-
-DURATION_HALF_NOTE = 2 * DURATION_QUARTER_NOTE
-DURATION_WHOLE_NOTE = 2 * DURATION_HALF_NOTE
 
 def full_step(n):
     note = (n - 1) % 12
@@ -41,7 +30,7 @@ def classify(note, staff, clef='treble'):
     delta_n = int(round((staff[-1] - note[1])/note_increment))
     return advance(n, delta_n)
 
-def classify2(note, staff, staff_thickness, staff_spacing, clef='treble'):
+def classify2(note, staff, staff_thickness, staff_spacing):
     """
     note: Center of the note
     staff: array of 5 points denoting the position of the lines of the staff
@@ -50,10 +39,6 @@ def classify2(note, staff, staff_thickness, staff_spacing, clef='treble'):
     n = 44
     delta_n = int(round(( (staff[-1] + staff_thickness//2) - note[1])/note_increment))
     return advance(n, delta_n)
-
-def play(note, duration=1):
-    fluidsynth.play_Note(note)
-    time.sleep(duration)
 
 # Start here.
 def read_image(path):
@@ -74,73 +59,6 @@ def load_dictionary(template_path='templates'):
         name = os.path.basename(path)[:-4]
         dictionary[name] = bin_img
     return dictionary
-
-# Ignore this
-def test():
-    fluidsynth.init('sfs/soundfont.sf2', 'alsa')
-    img = read_image('src/ode_to_joy.png')
-    result = img.copy()
-
-    t1 = time.time()
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, gray = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
-    lines = cv2.HoughLinesP(gray, 1, np.pi/2, 100, maxLineGap=15, )
-
-    staff_tmp = []
-    # print(lines)
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            if abs(y2 - y1) <= 1:
-                staff_tmp.append(y2)
-                cv2.line(result, (x1, y1), (x2, y2), (255, 0, 0), 1)
-
-    staff_tmp.sort()
-    staff = []
-    for i in range(len(staff_tmp)):
-        if len(staff) == 0 or staff_tmp[i] - staff[-1] >= img.shape[1]/100:
-            staff.append(staff_tmp[i])
-    print(staff)
-    notes = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 1)
-    if notes is not None:
-        for (x, y, r) in notes:
-            cv2.circle(result, (x, y), r, (0,0,255),1)
-    
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 4))
-    gray = cv2.erode(gray, kernel=kernel, iterations=1)
-    contours, hierarchy = cv2.findContours(gray, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    
-    cv2.drawContours(img, contours, -1, (0,255,0), 3)
-
-    note_sequence = []
-    if contours is not None:
-        for contour in contours:
-            # (cx, cy), radius = cv2.minEnclosingCircle(contour)
-            # print(contour)
-            M = cv2.moments(contour)
-            cx = int(M['m10']/M['m00'])
-            cy = int(M['m01']/M['m00'])
-            cv2.circle(img, (cx, cy), 2, (0,0,255))
-            note_sequence.append((cx, classify((cx, cy), staff)))
-    note_sequence.sort()
-    # note_sequence[2] = (note_sequence[2][0], 48)
-    print(note_sequence)
-
-    t2 = time.time()
-    print(t2 - t1)
-
-    cv2.imshow("gray", gray)
-    
-    cv2.imshow("Original", img)
-    cv2.imshow("Result Image", result)
-    cv2.waitKey(0)
-
-    
-    for note in note_sequence:
-        play(note[1], 0.5)
-
-    
-    cv2.destroyAllWindows()
 
 def sliding_window_argmax(arr, k):
     """
@@ -322,7 +240,6 @@ def find_all_symbols(img, staff_thickness, staff_spacing, draw_projection_plots=
         yproj = get_projection(img[:, vboundary[0]:vboundary[1]], axis='Y')
         horizontal_boundaries = get_interesting_intervals(yproj, threshold=staff_thickness//2)
         for hboundary in horizontal_boundaries:
-            print(hboundary)
             objects.append((vboundary[0], hboundary[0], vboundary[1], hboundary[1]))
     
     return objects
@@ -492,13 +409,13 @@ def match_symbol(I, symbol, dictionary, staff_thickness, staff_spacing, filled_c
         score, pos = _match_and_slide(I, symbol, mask, bound=1)
         scores.append( (score, name, pos) )
     scores.sort(reverse=True)
-    print(scores)
+    # print(scores)
     if scores[0][0] >= symbol_confidence:
         return [(scores[0][1], scores[0][2])]
 
     # If no template matches, then try finding empty note heads in the symbol.
     score_empty, pos = _match_and_slide(I, symbol, dictionary['empty_note'])
-    print(score_empty)
+    # print(score_empty)
     if score_empty >= empty_confidence:
         return [('half_note', pos)]
 
@@ -634,7 +551,6 @@ template_path = 'templates'
 dictionary = load_dictionary(template_path)
 
 def my_test(path):
-    fluidsynth.init('sfs/soundfont.sf2', 'alsa')
     print(path)
     img = read_image(path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -694,38 +610,39 @@ def my_test(path):
         
         symbols = find_all_symbols(track, staff_thickness, staff_spacing, draw_projection_plots=draw_projection_plots)
         y_offset = track_bound[0]
-
+        
         for x1, y1, x2, y2 in symbols:
             all_symbols.append( ((x1, y1+y_offset, x2, y2+y_offset), track_id) )
     
     t2 = time.time()
     print("Time taken to bound all symbols with boxes: {} ms".format(1000*(t2 - t1)))
 
-    note_sequences = [[]] * len(staves)
+    note_sequences = [[] for i in range(len(staves))]
 
     t1 = time.time()
-    for symbol, track_id in all_symbols:
+    for i, symbol, track_id in enumerate(all_symbols):
         x1, y1, x2, y2 = symbol
-
+        print("Recognizing symbol {} ...".format(i))
         characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
 
         for (name, pos) in characters:
             cv2.putText(img, name, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255))
-            note_sequences[track_id].append(name)
+            note_sequences[track_id].append((name, pos))
 
         cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
     
     t2 = time.time()
     print("Time taken to find classify all symbols: {} ms".format(1000*(t2 - t1)))
 
-    # for i in range(len(note_sequences)):
-    #     for name in note_sequences[i]:
-    #         Initialize a note object from note_sequences
-    #         Apply note's effect to track object
-    #         Maybe put the below in the note object class
-    #         if name contains 'note':
-    #             note = classify2((cx, cy), staff, staff_thickness, staff_spacing)
-    #             note_sequence.append((note, duration))
+    print(note_sequences)
+    with open('tests/out.txt', 'w') as f:
+        for i in range(len(note_sequences)):
+            f.write(f'Track{i}: ')
+            for name, pos in note_sequences[i]:
+                if name.endswith('note'):
+                    name = name + '.{}'.format(classify2(pos, staves[i], staff_thickness, staff_spacing))
+                f.write(f'{name} ')
+            f.write('\n')
 
     cv2.imshow("Gray", gray)
     cv2.imshow("Image", img)
@@ -787,8 +704,8 @@ def main():
     #     my_test(path)
     # my_test("src/samples.png")
     # my_test("src/half_note.png")
-    # my_test("src/ode_to_joy.png")
-    my_test("src/bar_keysig.png")
+    my_test("src/ode_to_joy.png")
+    # my_test("src/bar_keysig.png")
     # my_test("src/bass_clef.png")
     # my_test("src/three_bar.png")
 

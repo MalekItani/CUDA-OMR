@@ -272,13 +272,13 @@ vector<vector<unsigned char>> remove_staff(vector<vector<unsigned char>>& image,
 vector<vector<int>> find_vertical_lines(vector<vector<unsigned char >> image, int staff_thickness, int staff_spacing) {
 	int numRows = image.size(), numCols = 0;
 	if (numRows > 0)numCols = image[0].size();
-	vector<vector<int>>Iv = computeRuns(image, 'Y');
+	vector<vector<int>> Iv = computeRuns(image, 'Y');
 	int expected_segment_width = 3 * staff_thickness / 2;
 	if (expected_segment_width % 2 == 0)expected_segment_width--;
 	vector<double>Nl(expected_segment_width + 4, 0);
 	Nl[0] = Nl[1] = Nl[(int)Nl.size() - 1] = Nl[(int)Nl.size() - 2] = 0.25;
 	int mask_radius = (int)Nl.size() / 2;
-	vector<vector<double>>Il(numRows, vector<double>(numCols, 0));
+	vector<vector<double>> Il(numRows, vector<double>(numCols, 0));
 	for (int i = 0; i < numRows; i++) {
 		for (int j = 0; j < numCols; j++) {
 			if (image[i][j] == 0) {
@@ -292,7 +292,7 @@ vector<vector<int>> find_vertical_lines(vector<vector<unsigned char >> image, in
 			}
 		}
 	}
-	vector<vector<int>>potential_vertical_lines;
+	vector<vector<int>> potential_vertical_lines;
 	for (int j = 0; j < numCols; j++) {
 		int largest_run = 0;
 		int xh = 0, xb = 0;
@@ -306,7 +306,7 @@ vector<vector<int>> find_vertical_lines(vector<vector<unsigned char >> image, in
 			potential_vertical_lines.push_back({ j,xh,xb });
 		}
 	}
-	vector<vector<int>>vertical_lines;
+	vector<vector<int>> vertical_lines;
 	for (int i = 0; i < potential_vertical_lines.size(); i++) {
 		vector<int>line = potential_vertical_lines[i];
 		if (vertical_lines.size() == 0 || line[0] - vertical_lines[(int)vertical_lines.size() - 1][0] > 2 / 5 * staff_spacing)
@@ -342,6 +342,5 @@ vector<vector<vector<unsigned char>>> transformColoredImageToVector(unsigned cha
 
 int main()
 {
-
-
+	
 }
