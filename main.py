@@ -14,8 +14,10 @@ def full_step(n):
         return n + 2
 
 def advance(n, n_step):
-    for i in range(n_step):
+    i = 0
+    while i < n_step:
         n = full_step(n)
+        i += 1
     return n
 
 # Ignore this.
@@ -166,8 +168,8 @@ def segment_by_staves(img, staves, staff_thickness, staff_spacing):
     for staff in staves:
         # Consider two imaginary staff lines above and below to account for notes
         # above and below the staff. (May need to increase this)
-        y1 = max(staff[0] - 2*(staff_thickness + staff_spacing), 0)
-        y2 = min(staff[-1] + 2*(staff_thickness + staff_spacing), img.shape[0])
+        y1 = max(staff[0] - 3*(staff_thickness + staff_spacing), 0)
+        y2 = min(staff[-1] + 3*(staff_thickness + staff_spacing), img.shape[0])
         track_bounds.append( (y1, y2) )
     return track_bounds
 
@@ -429,7 +431,11 @@ def match_symbol(I, symbol, dictionary, staff_thickness, staff_spacing, filled_c
     # Note that if no notes are detected, then this symbol doesn't represent anything important,
     # and an empty list will be returned. 
     if len(pos) == 1:
-        return recognize_isolated_note(I, symbol, staff_thickness, staff_spacing)
+        if mask.shape[1] / (symbol[2] - symbol[0]) < 0.9:
+            return [('quarter_note', pos[0])]
+        else:
+            return [('eighth_note', pos[0])]    
+        # return recognize_isolated_note(I, symbol, staff_thickness, staff_spacing)
     else:
         return [('eighth_note', c) for c in pos]
 
@@ -495,9 +501,6 @@ def find_vertical_lines(I, staff_thickness, staff_spacing):
     
     # Compute Iv
     Iv = compute_runs(I, axis='Y')
-    
-    # Compute Ih (Used to account for skewness. Implement iza elak khele2.)
-    Ih = compute_runs(I, axis='X')
     
     # The paper assumed this to be at most 5, this didn't work so I'm making it adaptive
     expected_segment_width = 3 * staff_thickness//2
@@ -620,7 +623,7 @@ def my_test(path):
     note_sequences = [[] for i in range(len(staves))]
 
     t1 = time.time()
-    for i, symbol, track_id in enumerate(all_symbols):
+    for i, (symbol, track_id) in enumerate(all_symbols):
         x1, y1, x2, y2 = symbol
         print("Recognizing symbol {} ...".format(i))
         characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
@@ -704,8 +707,8 @@ def main():
     #     my_test(path)
     # my_test("src/samples.png")
     # my_test("src/half_note.png")
-    my_test("src/ode_to_joy.png")
-    # my_test("src/bar_keysig.png")
+    # my_test("src/ode_to_joy.png")
+    my_test("src/bar_keysig.png")
     # my_test("src/bass_clef.png")
     # my_test("src/three_bar.png")
 

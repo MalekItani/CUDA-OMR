@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <vector>
 #include <map>
+#include <chrono>
 #include <opencv2/core/core.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -9,7 +10,7 @@
 #include <opencv2/opencv.hpp>
 
 
-#define THRESHOLD_VALUE 225
+#define THRESHOLD_VALUE 205
 
 using namespace std;
 
@@ -207,18 +208,30 @@ void computeRuns(unsigned char *image, int *dst, char axis, int numRows, int num
 	}
 }
 
-void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness, int numRows, int numCols) {
+void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness, int staff_spacing,  int numRows, int numCols) {
     int* Iv = (int*) malloc(sizeof(int) * numRows * numCols);
 	computeRuns(image, Iv, 'Y', numRows, numCols);
 	
-	for (int i = 0; i < staff.size(); i++) {
-		int x = staff[i] + 1;
+    vector<int> istaff;
+    
+    for(int i = 0; i < 3; i++){
+        if(staff[0] - i*(staff_spacing + staff_thickness) >= 0) istaff.push_back(staff[0] - i * (staff_spacing + staff_thickness) );
+    }
+    
+    for(int i = 0; i < staff.size(); i++) istaff.push_back(staff[i]);
+    
+    for(int i = 1; i <= 3; i++) if(staff.back() + i*(staff_spacing +staff_thickness) < numRows) istaff.push_back(staff.back() + i * (staff_spacing + staff_thickness) )  ;
+    
+	for (int i = 0; i < istaff.size(); i++) {
+		int x = istaff[i] + 1;
+        if(x >= numRows) continue;
+        bool flag = (i < 3 || i > 8);
 		for (int j = 0; j < numCols; j++) {
 			if (Iv[x * numCols + j] == 0) continue;
 			
             int x2 = x;
 			while (x2 < numRows && Iv[x2 * numCols + j]>0) x2++;
-			if (Iv[ (x2 - 1) * numCols +  j] <= staff_thickness + 3) {
+			if (Iv[ (x2 - 1) * numCols +  j] <= (1 + flag) * staff_thickness + 3) {
 				int x1 = x2 - Iv[(x2 - 1) * numCols + j];
 				while (x1 < x2) {
 					image[x1 * numCols + j] = 1;
@@ -295,7 +308,6 @@ map<string, cv::Mat> load_dictionary(){
         
         int n = fn[i].size();
         string name = fn[i].substr(10, (n - 14));
-        cout << name << endl;
         cv::Mat template_image(raw_image.rows, raw_image.cols, CV_8UC1, binary_image);
         dictionary[name] = template_image;
     }
@@ -345,7 +357,7 @@ void _match_and_slide(unsigned char* image, vector<cv::Point> &symbol, unsigned 
                 for(int x = 0; x < maskRows; x++){
                     for(int y = 0; y < maskCols; y++){
                         if(i + x < numRows and j + y < numCols){
-                            tmp += (image[(i+x) * numCols + j+y] == mask[x * maskRows + y]);
+                            tmp += (image[(i+x) * numCols + j+y] == mask[x * maskCols + y]);
                         }
                     }
                 
@@ -420,8 +432,8 @@ void match_symbol(unsigned char* image, vector<cv::Point> &symbol, map<string, c
         names.push_back(name);
         index++;
     }
-    
     sort(scores.begin(), scores.end());
+    
     if(scores.back().first >= symbol_confidence){
         int idx = scores.back().second;
         res.push_back(make_pair(names[idx], posv[idx]) );
@@ -429,10 +441,10 @@ void match_symbol(unsigned char* image, vector<cv::Point> &symbol, map<string, c
     }
     
     mask = dictionary["empty_note"];
-    _match_and_slide(image, symbol, mask.data, numRows, numCols, mask.rows, mask.cols, score, pos, true);
+    _match_and_slide(image, symbol, mask.data, numRows, numCols, mask.rows, mask.cols, score, pos, false);
     
     if(score >= empty_confidence){
-        res.push_back(make_pair("empty_note", pos));
+        res.push_back(make_pair("half_note", pos));
         return ;
     }
     
@@ -441,13 +453,36 @@ void match_symbol(unsigned char* image, vector<cv::Point> &symbol, map<string, c
     _match_all(image, symbol, mask.data, posv, numRows, numCols, mask.rows, mask.cols, filled_confidence);
     
     if(posv.size() == 1){
-        // recognize;
-        res.push_back(make_pair("quarter_note", pos));
+        string name = "quater_note";
+        if( (1.0 * mask.cols)/(symbol[1].x - symbol[0].x) < 0.7) name = "eighth_note";
+        res.push_back(make_pair(name, pos));
     }else{
         for(auto pos : posv){
-            res.push_back(make_pair("half_note", pos));
+            res.push_back(make_pair("eigthth_note", pos));
         }
     }    
+}
+
+int full_step(int n){
+    int note = (n - 1) % 12;
+    if(note == 2 || note == 7) return n + 1;
+    else return n + 2;
+}
+        
+int advance(int n, int n_step){
+    int i = 0;
+    while(i < n_step){
+        n = full_step(n);
+        i += 1;
+    }
+    return n;
+}
+
+int classify_note(cv::Point note, vector<int> &staff, int staff_thickness, int staff_spacing){
+    int note_increment = (staff_thickness + staff_spacing)/2;
+    int n = 44;
+    int delta_n = int(round(( (staff.back() + staff_thickness/2) - note.y)/note_increment));
+    return advance(n, delta_n);
 }
 
 
@@ -529,7 +564,8 @@ void match_symbol(unsigned char* image, vector<cv::Point> &symbol, map<string, c
 
 int main()
 {
-    string filename = "src/*.png";
+//     string filename = "src/*.png";
+    string filename = "src/bar_keysig.png";
     vector<cv::String> fn;
     cv::glob(filename, fn, false);
     
@@ -574,7 +610,10 @@ int main()
         // Adjusting image size to match templates.
         double r = (1.0 * target_staff_spacing) / staff_spacing;
         image_height  *= r;
-        image_width = round( ( ((float) image_height ) /resized_image.rows)  * resized_image.cols  );
+        image_width = int( ( ((float) image_height ) /resized_image.rows)  * resized_image.cols  );
+        
+        cout << staff_spacing << endl;
+        cout << target_staff_spacing << endl;
         
         cv::Mat image(image_height, image_width, CV_8UC3);
         cv::resize(resized_image, image, image.size(), 0, 0, cv::INTER_AREA);
@@ -587,33 +626,59 @@ int main()
         // Start
         
         // Convert to grayscale and threshold
+        
+        auto t1 = std::chrono::high_resolution_clock::now();
         to_grayscale_and_threshold(input_image, binary_image, image_height, image_width);
+        auto t2 = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        
+        cout << "Time taken to convert input image to grayscale: " << setprecision(4) << fixed << duration << "us." << endl;
         
         // Compute staff parameters
+        t1 = std::chrono::high_resolution_clock::now();
         computeStaff(binary_image, staff_thickness, staff_spacing, image_height, image_width);        
-        
+        t2 = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        cout << "Time taken to compute staff parameters: " << setprecision(4) << fixed << duration << "us." << endl;
         
         vector<vector<int> > staves;
         
         // Locate staves
+        t1 = std::chrono::high_resolution_clock::now();
         find_staves(binary_image, staves, staff_thickness, staff_spacing, image_height, image_width);
-        
+        t2 = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        cout << "Time taken to locate staves in image: " << setprecision(4) << fixed << duration << "us." << endl;
         
         // Remove staves
+        t1 = std::chrono::high_resolution_clock::now();
         for(auto &staff : staves){
 //             draw_staff(image, staff, staff_thickness);
-            remove_staff(binary_image, staff, staff_thickness, image_height, image_width);
+            remove_staff(binary_image, staff, staff_thickness, staff_spacing, image_height, image_width);
         }
+        t2 = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        cout << "Time taken to remove all staves in image: " << setprecision(4) << fixed << duration << "us." << endl;
         
         vector<vector<int>> track_bounds = segment_by_staves(image_height, staves, staff_thickness, staff_spacing);
         
         vector<vector<cv::Point>> symbols;
+        vector<int> track_number;
         
+        t1 = std::chrono::high_resolution_clock::now();
         for(int i = 0; i < staves.size(); i++){
             vector<int> &track_bound = track_bounds[i];
-            
+            int x = symbols.size();
             find_all_symbols(binary_image, symbols, track_bound[0], track_bound[1], staff_thickness, image_height, image_width);
+            int y = symbols.size();
+            for(int j = x; j < y; j++){
+                track_number.push_back(i);
+            }
         }
+        
+        t2 = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        cout << "Time taken to bound all symbols with boxes: " << setprecision(4) << fixed << duration << "us." << endl;
         
         for(int i = 0; i < symbols.size(); i++){
             cv::Point p1 = symbols[i][0];
@@ -622,14 +687,37 @@ int main()
         }
         
         vector<pair<string, cv::Point> > res;
+        vector<vector<string>> char_sequence(staves.size()); 
         
+        t1 = std::chrono::high_resolution_clock::now();
         for(int i = 0; i < symbols.size(); i++){
+            int x = res.size();
             match_symbol(binary_image, symbols[i], dictionary, res, staff_thickness, staff_spacing, image_height, image_width);
+            int y = res.size();
+            for(int j = x; j < y; j++){
+                string name = res[j].first;
+                if(name.find("note") != string::npos ){
+                    name = name + '.' + to_string( classify_note(res[j].second, staves[track_number[i]], staff_thickness, staff_spacing ) );
+                }
+                char_sequence[track_number[i]].push_back(name);
+            }
         }
+        
+        t2 = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::microseconds>( t2 - t1 ).count();
+        cout << "Time taken to classify all symbols: " << setprecision(4) << fixed << duration << "us." << endl;
         
         for(int i = 0; i < res.size(); i++){
             cv::Point p1 = res[i].second;
             cv::putText(image, res[i].first, p1, cv::FONT_HERSHEY_PLAIN, 0.8, cv::Scalar(0,0,255));
+        }
+        
+        ofstream of("out.txt");
+        for(int t = 0; t < staves.size(); t++){
+            of << "Track" << t << ": ";
+            for(int i = 0; i < char_sequence[t].size(); i++){
+                of << char_sequence[t][i] << " ";
+            }of << endl;
         }
         
         scale(binary_image, 255, image_height, image_width);

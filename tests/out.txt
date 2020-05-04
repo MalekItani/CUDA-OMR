@@ -1,1 +1,2 @@
-Track0: quarter_note.51 quarter_note.51 quarter_note.52 quarter_note.54 quarter_note.54 quarter_note.52 quarter_note.51 quarter_note.49 quarter_note.47 quarter_note.47 quarter_note.49 quarter_note.51 quarter_note.51 eighth_note.49 half_note.49 
+Track0: treble_clef half_rest 
+Track1: bass_clef dot dot eighth_note.44 eighth_rest eighth_note.44 eighth_note.47 eighth_note.44 eighth_rest eighth_note.44 
