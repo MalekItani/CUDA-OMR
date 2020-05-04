@@ -1,30 +1,17 @@
 #include <iostream>
-#include <set>
 #include <algorithm>
 #include <vector>
-#include <map>
-#include <cmath>
-#include <string>
-#include <unordered_map>
-#include <stack>
-#include <iomanip>
-#include <fstream>
-#include <cstring>
-#include <list>
-#include <map>
-#include <bitset>
-#include <queue>
-#include <functional>  
-#include <numeric>      
-#include <assert.h>
-#include <unordered_set>
-#include <array>
-#include <stdio.h>
-#include<complex>
+#include <opencv2/core/core.hpp>
+#include <opencv2/core/utility.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/opencv.hpp>
+
+#define THRESHOLD_VALUE 225
+
 using namespace std;
+
 /*
-
-
 Functions not implemented or partially implemented
 -find_all_symbols
 -recognize isolated symbol
@@ -51,10 +38,40 @@ int sliding_window_argmax(vector<int>& a, int k)
 	return maxInd;
 }
 
-pair<int, int> computeStaff(vector<vector<unsigned char>>& image)
+vector<int> getprojection(unsigned char* image, int numRows, int numCols, char axis = 'X', int startx = 0, int starty = 0, int endx = -1, int endy = -1)
 {
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
+	if(endx == -1) endx = numCols - 1;
+    if(endy == -1) endy = numRows - 1;
+    
+    vector<int> result;
+    if(axis == 'X'){
+        result.resize(endx - startx + 1, 0);
+    }else{
+        result.resize(endy - starty + 1, 0);
+    }
+	if (axis == 'X'){
+		for (int j = startx; j <= endx; j++){
+			for (int i = starty; i < endy; i++){
+				if (image[i * numCols + j] == 0){
+					result[j - startx]++;
+				}
+			}
+		}
+	}
+	else{
+		for (int i = starty; i <= endy; i++){
+			for (int j = startx; j < endx; j++){
+				if (image[i * numCols + j] == 0){
+					result[i - starty]++;
+				}
+			}
+		}
+	}
+	return result;
+}
+
+void computeStaff(unsigned char* image, int &staff_thickness, int &staff_spacing, int numRows, int numCols)
+{
 	vector<int> whitehist(numRows + 1, 0);
 	vector<int> blackhist(numRows + 1, 0);
 	for (int j = 0; j < numCols; j++)
@@ -62,7 +79,7 @@ pair<int, int> computeStaff(vector<vector<unsigned char>>& image)
 		for (int i = 0; i < numRows; i++)
 		{
 			int seqlen = 0;
-			while (i < numRows && image[i][j] > 0)
+			while (i < numRows && image[i*numCols + j] > 0)
 			{
 				seqlen++; i++;
 			}
@@ -71,7 +88,7 @@ pair<int, int> computeStaff(vector<vector<unsigned char>>& image)
 				whitehist[seqlen] += 1;
 			}
 			seqlen = 0;
-			while (i < numRows && image[i][j] == 0)
+			while (i < numRows && image[i*numCols + j] == 0)
 			{
 				seqlen++; i++;
 			}
@@ -81,47 +98,34 @@ pair<int, int> computeStaff(vector<vector<unsigned char>>& image)
 			}
 		}
 	}
-	pair<int, int> ans;
-	ans.first = sliding_window_argmax(blackhist, 1) - 1;
-	ans.second = sliding_window_argmax(whitehist, 1) + 1;
-	return ans;
+	staff_thickness = sliding_window_argmax(blackhist, 1) - 1;
+	staff_spacing = sliding_window_argmax(whitehist, 1) + 1;
 }
 
-vector<vector<int>> find_staves(vector<vector<unsigned char>>& image, int staff_thickness, int staff_spacing)
+void find_staves(unsigned char *image, vector<vector<int> > &staves, int staff_thickness, int staff_spacing, int numRows, int numCols)
 {
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
-	vector<int> staves;
-	vector<vector<int>> staves_pos;
-	vector<int> score(numRows, 0);
-	for (int j = 0; j < numCols; j++)
-	{
-		for (int i = 0; i < numRows - staff_thickness; i++)
-		{
-			for (int k = i; k < i + staff_spacing; k++)
-			{
-				score[i] += 1 - image[k][j];
-			}
-		}
-	}
+	vector<int> staff;
+    vector<int> score = getprojection(image, numRows, numCols, 'Y');
+    for(int i = 1; i < numRows; i++){
+        score[i] = score[i] + score[i-1];
+    }
+
 	double confidence = 0.8;
 	int threshold = numCols * staff_thickness;
-	int row = 0;
-	while (row < numRows)
-	{
-		if (score[row] > threshold * confidence)
-			staves.push_back(row + staff_thickness / 2);
-		if (staves.size() == 5)
-		{
-			staves_pos.push_back(staves);
-			staves.clear();
+	int row = 1;
+	while (row < numRows-staff_thickness){
+		if (score[row+staff_thickness] - score[row-1] > threshold * confidence){
+            staff.push_back(row + staff_thickness / 2);
+            row += staff_spacing - 2;
+        }else{
+            row++;
+        }
+		if (staff.size() == 5){
+			staves.push_back(staff);
+			staff.clear();
 			confidence = 0.8;
 		}
-		row += staff_spacing - 2;
-		if (confidence == 0.8)
-			confidence = 0.6;
 	}
-	return staves_pos;
 }
 
 vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>> staves, int staff_thickness, int staff_spacing)
@@ -134,48 +138,6 @@ vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>> staves, i
 		track_bounds.push_back({ y1,y2 });
 	}
 	return track_bounds;
-}
-
-vector<int> getprojection(vector<vector<unsigned char>>& image, int start = 0, int end = -1, char axis = 'X')
-{
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
-	if (end == -1)
-	{
-		if (axis == 'X')
-		{
-			end = numCols;
-		}
-		else end = numRows;
-	}
-	vector<int> result(end - start, 0);
-	if (axis == 'X')
-	{
-		for (int j = start; j <= end; j++)
-		{
-			for (int i; i < numRows; i++)
-			{
-				if (image[i][j] == 0)
-				{
-					result[j - start]++;
-				}
-			}
-		}
-	}
-	else
-	{
-		for (int i = start; i <= end; i++)
-		{
-			for (int j; j < numCols; j++)
-			{
-				if (image[i][j] == 0)
-				{
-					result[i - start]++;
-				}
-			}
-		}
-	}
-	return result;
 }
 
 vector<vector<int>> get_interesting_intervals(vector<int> proj, int threshold)
@@ -199,7 +161,7 @@ vector<vector<int>> get_interesting_intervals(vector<int> proj, int threshold)
 	return boundaries;
 }
 
-void find_all_symbols(vector<vector<unsigned char>>& image, int staff_thickness, int staff_spacing) {
+void find_all_symbols(unsigned char* image, int staff_thickness, int staff_spacing) {
 	vector<int>xproj = getprojection(image, 0, -1, 'X');
 	vector<int>yproj = getprojection(image, 0, -1, 'Y');
 	auto vertical_boundaries = get_interesting_intervals(xproj, staff_thickness);
@@ -208,22 +170,19 @@ void find_all_symbols(vector<vector<unsigned char>>& image, int staff_thickness,
 	}
 }
 
-vector<vector<int>> computeRuns(vector<vector<unsigned char>>& image, char axis) {
-
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
+void computeRuns(unsigned char *image, int *dst, char axis, int numRows, int numCols) {
 	vector<vector<int>>res(numRows, vector<int>(numCols, 0));
 	if (axis == 'X') {
 		for (int i = 0; i < numRows; i++) {
 			int currentSequence = 0;
 			for (int j = 0; j < numCols; j++) {
-				if (image[i][j] == 0) {
+				if (image[i * numCols + j] == 0) {
 					currentSequence++;
 				}
 				else {
 					currentSequence = 0;
 				}
-				res[i][j] = currentSequence;
+				dst[i*numCols+j] = currentSequence;
 			}
 		}
 	}
@@ -231,94 +190,40 @@ vector<vector<int>> computeRuns(vector<vector<unsigned char>>& image, char axis)
 		for (int j = 0; j < numCols; j++) {
 			int currentSequence = 0;
 			for (int i = 0; i < numRows; i++) {
-				if (image[i][j] == 0) {
+				if (image[i * numCols + j] == 0) {
 					currentSequence++;
 				}
 				else {
 					currentSequence = 0;
 				}
-				res[i][j] = currentSequence;
+				dst[i*numCols+j] = currentSequence;
 			}
 		}
 
 	}
-	return res;
 }
 
-vector<vector<unsigned char>> remove_staff(vector<vector<unsigned char>>& image, vector<int>staff, int staff_thickness) {
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
-	vector<vector<int>>Iv = computeRuns(image, 'Y');
-	vector<vector<unsigned char>>res(numRows, vector<unsigned char>(numCols));
-	for (int i = 0; i < numRows; i++) {
-		for (int j = 0; j < numCols; j++) {
-			res[i][j] = image[i][j];
-		}
-	}
+void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness, int numRows, int numCols) {
+    int* Iv = (int*) malloc(sizeof(int) * numRows * numCols);
+	computeRuns(image, Iv, 'Y', numRows, numCols);
+	
 	for (int i = 0; i < staff.size(); i++) {
-		int x = staff[i];
+		int x = staff[i] + 1;
 		for (int j = 0; j < numCols; j++) {
-			if (Iv[x][j] == 0)continue;
-			int x2 = x;
-			while (x2 < numRows && Iv[x2][j]>0)x2++;
-			if (Iv[x2 - 1][j] <= staff_thickness + 2) {
-				int x1 = x2 - Iv[x2 - 1][j];
+			if (Iv[x * numCols + j] == 0) continue;
+			
+            int x2 = x;
+			while (x2 < numRows && Iv[x2 * numCols + j]>0) x2++;
+			if (Iv[ (x2 - 1) * numCols +  j] <= staff_thickness + 3) {
+				int x1 = x2 - Iv[(x2 - 1) * numCols + j];
 				while (x1 < x2) {
-					res[x1][j] = 1;
+					image[x1 * numCols + j] = 1;
 					x1++;
 				}
 			}
 		}
 	}
-	return res;
-}
-
-vector<vector<int>> find_vertical_lines(vector<vector<unsigned char >> image, int staff_thickness, int staff_spacing) {
-	int numRows = image.size(), numCols = 0;
-	if (numRows > 0)numCols = image[0].size();
-	vector<vector<int>> Iv = computeRuns(image, 'Y');
-	int expected_segment_width = 3 * staff_thickness / 2;
-	if (expected_segment_width % 2 == 0)expected_segment_width--;
-	vector<double>Nl(expected_segment_width + 4, 0);
-	Nl[0] = Nl[1] = Nl[(int)Nl.size() - 1] = Nl[(int)Nl.size() - 2] = 0.25;
-	int mask_radius = (int)Nl.size() / 2;
-	vector<vector<double>> Il(numRows, vector<double>(numCols, 0));
-	for (int i = 0; i < numRows; i++) {
-		for (int j = 0; j < numCols; j++) {
-			if (image[i][j] == 0) {
-				double pixval = 0;
-				for (int k = -mask_radius; k <= mask_radius + 1; k++) {
-					if (j + k >= 0 && j + k < numCols) {
-						pixval += image[i][j + k] * Nl[mask_radius + k];
-					}
-				}
-				Il[i][j] = pixval;
-			}
-		}
-	}
-	vector<vector<int>> potential_vertical_lines;
-	for (int j = 0; j < numCols; j++) {
-		int largest_run = 0;
-		int xh = 0, xb = 0;
-		for (int i = 0; i < numRows; i++) {
-			if (Iv[i][j] > largest_run) {
-				largest_run = Iv[i][j];
-				xh = i - largest_run, xb = i;
-			}
-		}
-		if (largest_run > 2 * staff_spacing) {
-			potential_vertical_lines.push_back({ j,xh,xb });
-		}
-	}
-	vector<vector<int>> vertical_lines;
-	for (int i = 0; i < potential_vertical_lines.size(); i++) {
-		vector<int>line = potential_vertical_lines[i];
-		if (vertical_lines.size() == 0 || line[0] - vertical_lines[(int)vertical_lines.size() - 1][0] > 2 / 5 * staff_spacing)
-		{
-			vertical_lines.push_back(line);
-		}
-	}
-	return vertical_lines;
+	free(Iv);
 }
 
 vector<vector<unsigned char>> transformBinarImageToVector(unsigned char* image, int numRows, int numCols) {
@@ -343,79 +248,203 @@ vector<vector<vector<unsigned char>>> transformColoredImageToVector(unsigned cha
 	return res;
 }
 
-//cuda kernels:
-__global__ void colorToGrayscaleConversion(unsigned char* Pout, unsigned char* Pin, int width, int height, int numChannels)
-{
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	if (x < width && y < height) {
-		int grayOffset = y * width + x;
-		int rgbOffset = grayOffset * numChannels;
-		unsigned char r = Pin[rgbOffset];
-		unsigned char g = Pin[rgbOffset + 1];
-		unsigned char b = Pin[rgbOffset + 2];
-		Pout[grayOffset] = 0.21f * r + 0.71f * g + 0.07f * b;
-	}
+void to_grayscale_and_threshold(unsigned char *src, unsigned char *dst, int height, int width){
+    for(int i = 0; i < height; i++){
+        for(int j = 0; j < width; j++){
+            int gray_offset = i * width + j;
+            int k = 3 * gray_offset;
+            dst[gray_offset] = 0.299 * src[k] + 0.587 * src[k+1] + 0.114 * src[k+2];
+            if(dst[gray_offset] >= THRESHOLD_VALUE) dst[gray_offset] = 1;
+            else dst[gray_offset] = 0;
+        }
+    }
 }
 
-
-__global__ void match_and_slide(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output, bool bound) {
-
-	//output is of the size of th bounding box
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
-	int score = 0;
-	int pos[2] = { -1,-2 };
-	double rx = (x2 - x1 + 0.0) / mask_width, ry = (y2 - y1 + 0.0) / mask_height;
-	double min_ratio = 0.8, max_ratio = 1.2;
-
-	if (!bound || (bound && rx >= min_ratio && rx <= max_ratio && ry >= min_ratio && ry <= max_ratio)) {
-		int col = x + x1;
-		int row = y + y1;
-		int colbound, rowbound;
-		if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
-		else rowbound = y1 + 1;
-		if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
-		else colbound = x1 + 1;
-		if (col <= colbound && row <= rowbound) {
-			int tmp = 0;
-			for (int x3 = 0; x3 < mask_width; x3++) {
-				for (int y3 = 0; y3 < mask_hight; y3++) {
-					if (row + y3 < numRows && col + x3 <= numCols)
-						tmp += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
-				}
-			}
-			output[y * (y2 - y1 + 1) + x] = tmp;
-		}
-	}
+void scale(unsigned char *src, int k, int height, int width){
+    for(int i = 0; i < height; i++){
+        for(int j = 0; j < width; j++){
+            int idx = i * width + j;
+            src[idx] *= k;
+        }
+    }
 }
 
-__global__ void match_all(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output) {
+void draw_staff(cv::Mat img, vector<int> &staff,  int thickness=1){    
+    for(int y : staff){
+        cv::line(img, cv::Point(0, y), cv::Point(img.cols-1, y), cv::Scalar(0,0,255), thickness);
+    }
 
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
-	int col = x + x1;
-	int row = y + y1;
-	int colbound, rowbound;
-	if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
-	else rowbound = y1 + 1;
-	if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
-	else colbound = x1 + 1;
-	if (col < colbound && row < rowbound) {
-		int score = 0;
-		for (int x3 = 0; x3 < mask_width; x3++) {
-			for (int y3 = 0; y3 < mask_hight; y3++) {
-				if (row + y3 < numRows && col + x3 <= numCols)
-					score += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
-			}
-		}
-		output[y * (y2 - y1 + 1) + x] = tmp;
-	}
 }
+// ***************************************************************** CUDA KERNELS ****************************************************************** //
+
+// __global__ void colorToGrayscaleConversion(unsigned char* Pout, unsigned char* Pin, int width, int height, int numChannels)
+// {
+// 	int x = threadIdx.x + blockIdx.x * blockDim.x;
+// 	int y = threadIdx.y + blockIdx.y * blockDim.y;
+// 	if (x < width && y < height) {
+// 		int grayOffset = y * width + x;
+// 		int rgbOffset = grayOffset * numChannels;
+// 		unsigned char r = Pin[rgbOffset];
+// 		unsigned char g = Pin[rgbOffset + 1];
+// 		unsigned char b = Pin[rgbOffset + 2];
+// 		Pout[grayOffset] = 0.21f * r + 0.71f * g + 0.07f * b;
+// 	}
+// }
+
+// 
+// __global__ void match_and_slide(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output, bool bound) {
+// 
+// 	output is of the size of th bounding box
+// 	int x = threadIdx.x + blockIdx.x * blockDim.x;
+// 	int y = threadIdx.y + blockIdx.y * blockDim.y;
+// 	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
+// 	int score = 0;
+// 	int pos[2] = { -1,-2 };
+// 	double rx = (x2 - x1 + 0.0) / mask_width, ry = (y2 - y1 + 0.0) / mask_height;
+// 	double min_ratio = 0.8, max_ratio = 1.2;
+// 
+// 	if (!bound || (bound && rx >= min_ratio && rx <= max_ratio && ry >= min_ratio && ry <= max_ratio)) {
+// 		int col = x + x1;
+// 		int row = y + y1;
+// 		int colbound, rowbound;
+// 		if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
+// 		else rowbound = y1 + 1;
+// 		if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
+// 		else colbound = x1 + 1;
+// 		if (col <= colbound && row <= rowbound) {
+// 			int tmp = 0;
+// 			for (int x3 = 0; x3 < mask_width; x3++) {
+// 				for (int y3 = 0; y3 < mask_hight; y3++) {
+// 					if (row + y3 < numRows && col + x3 <= numCols)
+// 						tmp += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
+// 				}
+// 			}
+// 			output[y * (y2 - y1 + 1) + x] = tmp;
+// 		}
+// 	}
+// }
+// 
+// __global__ void match_all(unsigned char* image, int numRows, int numCols, int* symbol, unsigned char* mask, int mask_height, int mask_width, unsigned char* output) {
+// 
+// 	int x = threadIdx.x + blockIdx.x * blockDim.x;
+// 	int y = threadIdx.y + blockIdx.y * blockDim.y;
+// 	int x1 = symbol[0], y1 = symbol[1], x2 = symbol[2], y2 = symbol[3];
+// 	int col = x + x1;
+// 	int row = y + y1;
+// 	int colbound, rowbound;
+// 	if (y2 - mask_height >= y1 + 1)rowbound = y2 - mask_height;
+// 	else rowbound = y1 + 1;
+// 	if (x2 - mask_width >= x1 + 1)colbound = x2 - mask_width;
+// 	else colbound = x1 + 1;
+// 	if (col < colbound && row < rowbound) {
+// 		int score = 0;
+// 		for (int x3 = 0; x3 < mask_width; x3++) {
+// 			for (int y3 = 0; y3 < mask_hight; y3++) {
+// 				if (row + y3 < numRows && col + x3 <= numCols)
+// 					score += image[(row + y3) * numCols + col + x3] == mask[y3 * mask_width + x3];
+// 			}
+// 		}
+// 		output[y * (y2 - y1 + 1) + x] = tmp;
+// 	}
+// }
+
+// ********************************************************************** MAIN ****************************************************************** //
+
 
 int main()
 {
-	
+    string filename = "src/*.png";
+    vector<cv::String> fn;
+    cv::glob(filename, fn, false);
+    
+    
+    ifstream in("templates/conf.txt");
+    char c; in >> c;
+    while(c != '='){
+        in >> c;
+    }
+    int target_staff_spacing;
+    in >> target_staff_spacing;
+    
+    for (size_t i=0; i<fn.size(); i++){
+        cout << fn[i] << endl;
+        cv::Mat raw_image = cv::imread(fn[i], cv::IMREAD_COLOR);
+        
+        int image_height = 400;
+        int image_width = round( ( ((float) image_height ) /raw_image.rows)  * raw_image.cols  );
+        
+        cv::Mat resized_image(image_height, image_width, CV_8UC3);
+        cv::resize(raw_image, resized_image, resized_image.size(), 0, 0, cv::INTER_AREA);
+        
+        image_height = resized_image.rows;
+        image_width = resized_image.cols;
+        int npixels = resized_image.rows* resized_image.cols;
+        
+        
+        // Allocate the host image vectors
+        unsigned char *input_image = (unsigned char *) malloc(3 * npixels * sizeof(unsigned char));
+        unsigned char *binary_image = (unsigned char *) malloc(npixels * sizeof(unsigned char));
+        input_image = resized_image.data;
+        
+        // Convert to grayscale
+        to_grayscale_and_threshold(input_image, binary_image, image_height, image_width);
+        
+        // Compute the staff parameters
+        int staff_thickness, staff_spacing;
+        computeStaff(binary_image, staff_thickness, staff_spacing, image_height, image_width);
+        
+        // Adjusting image size to match templates.
+        double r = (1.0 * target_staff_spacing) / staff_spacing;
+        image_height  *= r;
+        image_width = round( ( ((float) image_height ) /resized_image.rows)  * resized_image.cols  );
+        
+        cv::Mat image(image_height, image_width, CV_8UC3);
+        cv::resize(resized_image, image, image.size(), 0, 0, cv::INTER_AREA);
+        npixels = image.rows* image.cols;
+        
+        input_image = (unsigned char*) malloc(3 * npixels * sizeof(unsigned char));
+        binary_image = (unsigned char*) realloc(binary_image, npixels * sizeof(unsigned char));
+        input_image = image.data;
+        
+        // Start
+        
+        cout << 1 << endl;
+        
+        // Convert to grayscale and threshold
+        to_grayscale_and_threshold(input_image, binary_image, image_height, image_width);
+        
+        
+        cout << 2 << endl;
+        // Compute staff parameters
+        computeStaff(binary_image, staff_thickness, staff_spacing, image_height, image_width);        
+        
+        
+        vector<vector<int> > staves;
+        
+        cout << 3 << endl;
+        // Locate staves
+        find_staves(binary_image, staves, staff_thickness, staff_spacing, image_height, image_width);
+        
+        
+        cout << 4 << endl;
+        // Remove staves
+        for(auto &staff : staves){
+            draw_staff(image, staff, staff_thickness);
+            remove_staff(binary_image, staff, staff_thickness, image_height, image_width);
+        }
+        
+        
+        
+        
+        scale(binary_image, 255, image_height, image_width);
+        
+        cv::Mat result(image_height, image_width, CV_8UC1, binary_image);
+        cv::imshow("Original", image);
+        cv::imshow("Result", result);
+        cv::waitKey(0);
+        
+        free(binary_image);
+    }
+    return 0;
+    
 }
