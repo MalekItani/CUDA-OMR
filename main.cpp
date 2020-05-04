@@ -1,11 +1,13 @@
 #include <iostream>
 #include <algorithm>
 #include <vector>
+#include <map>
 #include <opencv2/core/core.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/opencv.hpp>
+
 
 #define THRESHOLD_VALUE 225
 
@@ -46,27 +48,23 @@ vector<int> getprojection(unsigned char* image, int numRows, int numCols, char a
     vector<int> result;
     if(axis == 'X'){
         result.resize(endx - startx + 1, 0);
-    }else{
-        result.resize(endy - starty + 1, 0);
-    }
-	if (axis == 'X'){
-		for (int j = startx; j <= endx; j++){
-			for (int i = starty; i < endy; i++){
+        for (int i = starty; i <= endy; i++){
+            for (int j = startx; j <= endx; j++){
 				if (image[i * numCols + j] == 0){
 					result[j - startx]++;
 				}
 			}
 		}
-	}
-	else{
-		for (int i = starty; i <= endy; i++){
-			for (int j = startx; j < endx; j++){
+    }else{
+        result.resize(endy - starty + 1, 0);
+        for (int i = starty; i <= endy; i++){
+			for (int j = startx; j <= endx; j++){
 				if (image[i * numCols + j] == 0){
 					result[i - starty]++;
 				}
 			}
 		}
-	}
+    }
 	return result;
 }
 
@@ -128,46 +126,52 @@ void find_staves(unsigned char *image, vector<vector<int> > &staves, int staff_t
 	}
 }
 
-vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>> staves, int staff_thickness, int staff_spacing)
+vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>> &staves, int staff_thickness, int staff_spacing)
 {
 	vector<vector<int>> track_bounds;
 	for (int i = 0; i < staves.size(); i++)
 	{
-		int y1 = max(staves[i][0] - 2 * (staff_thickness + staff_spacing), 0);
-		int y2 = min(staves[i][(int)staves[i].size() - 1] + 2 * (staff_thickness + staff_spacing), numRows);
+		int y1 = max(staves[i][0] - 3 * (staff_thickness + staff_spacing), 0);
+		int y2 = min(staves[i][(int)staves[i].size() - 1] + 3 * (staff_thickness + staff_spacing), numRows);
 		track_bounds.push_back({ y1,y2 });
 	}
 	return track_bounds;
 }
 
-vector<vector<int>> get_interesting_intervals(vector<int> proj, int threshold)
+vector<vector<int>> get_interesting_intervals(vector<int> &proj, int threshold)
 {
 	vector<vector<int>> boundaries;
-	int max1 = *max_element(proj.begin(), proj.end());
-	for (int i = 0; i < proj.size(); i++)
-	{
-		if (proj[i] < threshold || proj[i] >= max1 - 1) i++;
-		else
-		{
+    int i = 0;
+	while(i < proj.size()){
+		if (proj[i] < threshold) i++;
+		else{
 			vector<int> boundary = { i };
-			while (i < proj.size() && proj[i] >= threshold)
-			{
+			while (i < proj.size() && proj[i] >= threshold){
 				i++;
 			}
-			boundary[0] += i;
+			boundary.push_back(i);
 			boundaries.push_back(boundary);
 		}
 	}
 	return boundaries;
 }
 
-void find_all_symbols(unsigned char* image, int staff_thickness, int staff_spacing) {
-	vector<int>xproj = getprojection(image, 0, -1, 'X');
-	vector<int>yproj = getprojection(image, 0, -1, 'Y');
-	auto vertical_boundaries = get_interesting_intervals(xproj, staff_thickness);
-	for (auto vboundary : vertical_boundaries) {
-		//tricky !!!
-	}
+void find_all_symbols(unsigned char* image, vector<vector<cv::Point>> &symbols, int starty, int endy, int staff_thickness, int numRows, int numCols) {
+	vector<int>xproj = getprojection(image, numRows, numCols, 'X', 0, starty, -1, endy);
+
+    vector<vector<int>> vertical_boundaries = get_interesting_intervals(xproj, staff_thickness);
+
+    for(int i = 0; i < vertical_boundaries.size(); i++){
+        vector<int> vboundary = vertical_boundaries[i];
+        vector<int> yproj = getprojection(image, numRows, numCols, 'Y', vboundary[0], starty, vboundary[1], endy);
+        
+        vector<vector<int>> horizontal_boundaries = get_interesting_intervals(yproj, staff_thickness/2);
+        
+        for(int j = 0; j < horizontal_boundaries.size(); j++){
+            vector<int> hboundary = horizontal_boundaries[j];
+            symbols.push_back( {cv::Point(vboundary[0], starty + hboundary[0]), cv::Point(vboundary[1], starty + hboundary[1])}  );
+        }
+    }
 }
 
 void computeRuns(unsigned char *image, int *dst, char axis, int numRows, int numCols) {
@@ -226,7 +230,7 @@ void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness,
 	free(Iv);
 }
 
-vector<vector<unsigned char>> transformBinarImageToVector(unsigned char* image, int numRows, int numCols) {
+vector<vector<unsigned char>> transformBinaryImageToVector(unsigned char* image, int numRows, int numCols) {
 	vector<vector<unsigned char>>res(numRows, vector<unsigned char>(numCols));
 	for (int i = 0; i < numRows; i++) {
 		for (int j = 0; j < numCols; j++) {
@@ -275,6 +279,178 @@ void draw_staff(cv::Mat img, vector<int> &staff,  int thickness=1){
     }
 
 }
+
+map<string, cv::Mat> load_dictionary(){
+    map<string, cv::Mat> dictionary;
+    
+    string filename = "templates/*.png";
+    vector<cv::String> fn;
+    cv::glob(filename, fn, false);
+    
+    for (size_t i=0; i<fn.size(); i++){
+        cv::Mat raw_image = cv::imread(fn[i], cv::IMREAD_COLOR);
+        
+        unsigned char* binary_image = (unsigned char *) malloc(sizeof(unsigned char) * raw_image.rows * raw_image.cols );
+        to_grayscale_and_threshold(raw_image.data, binary_image, raw_image.rows, raw_image.cols);
+        
+        int n = fn[i].size();
+        string name = fn[i].substr(10, (n - 14));
+        cout << name << endl;
+        cv::Mat template_image(raw_image.rows, raw_image.cols, CV_8UC1, binary_image);
+        dictionary[name] = template_image;
+    }
+    
+    return dictionary;
+}
+
+void _match_and_slide(unsigned char* image, vector<cv::Point> &symbol, unsigned char *mask, int numRows, int numCols, int maskRows, int maskCols, double &score, cv::Point &pos, bool bound = false){
+    /*
+    * Given an input binary image I, a bounding rectangle symbol, and a template mask, find the
+    * most probably position where this template could be in this symbol by sliding this 
+    * template accross the symbol and counting the number of matching pixels.
+    * A score is assigned equal to the number of matching pixels / number of pixels in the templat 
+    */
+    
+    // Initialize symbol rectangle bounds and mask rectangle bounds
+    cv::Point p1 = symbol[0];
+    cv::Point p2 = symbol[1];
+
+    // Initialize score and position variables
+
+    // For most templates, the width and height should be a bit close to the symbol. 
+    // However, for empty and filled note templates, these could be found anywhere within
+    // the symbol. In order to control this behavior, we use the bound parameter.
+    // If bound is set, we do the following:
+    // In order to speed things up, only consider symbols whose height and width are close
+    // to the height and width of the mask. This avoids trying to slide very small masks
+    // over large symbols, which obviously do not match.
+
+    // Find the ratio of symbol width to mask width and ration of symbol height to mask height
+    // If these ratios are too large or too small, then don't try proceed.
+    double rx = (p2.x - p1.x) * 1.0 / maskCols;
+    double ry = (p2.y - p1.y) * 1.0 / maskRows;
+
+    double min_ratio = 0.8;
+    double max_ratio = 1.2;
+
+    // If bound is not set, then we proceed normally:
+    if(!bound || (bound && (min_ratio <= rx &&  rx <= max_ratio) and (min_ratio <= ry && ry <= max_ratio) )){
+        // Loop over every pixel in the symbol to choose the top left corner (i, j) and try matching.
+        // From experimentation, it helps to consider at the least the first pixel, even if
+        // the bounds of the template exceed the bounds of the symbol. Usually, they don't exceed
+        // exceed them by too much if there really is a match.
+        for(int i = p1.y; i < max(p2.y - maskRows, p1.y + 1); i++){
+            for(int j = p1.x; j < max(p2.x - maskCols, p1.x + 1); j++){
+                double tmp = 0;
+                for(int x = 0; x < maskRows; x++){
+                    for(int y = 0; y < maskCols; y++){
+                        if(i + x < numRows and j + y < numCols){
+                            tmp += (image[(i+x) * numCols + j+y] == mask[x * maskRows + y]);
+                        }
+                    }
+                
+                    if(tmp > score){
+                        score = tmp;
+                        pos = cv::Point(j + maskCols/2, i + maskRows/2); // Pos should be the exact center of where the match takes place
+                    }
+                
+                }
+            }
+        }
+    }
+    score /= (maskRows * maskCols);
+}
+
+void _match_all(unsigned char* image, vector<cv::Point> &symbol, unsigned char *mask, vector<cv::Point> &pos, int numRows, int numCols, int maskRows, int maskCols, double confidence){
+
+    cv::Point p1 = symbol[0];
+    cv::Point p2 = symbol[1];
+    
+    int i = p1.y;
+    while(i < max(p2.y - maskRows, p1.y + 1)){
+        // If we do find a match, then we set a flag, so that we know we should jump by one 
+        // whole mask_height in the next iteration of i
+        bool flag = 0;
+        int j = p1.x;
+        while(j < max(p2.x - maskCols, p1.x + 1)){
+            double score = 0;
+            for(int x = 0; x < maskRows; x++){
+                for(int y = 0; y < maskCols; y++){
+                    if(i + x < numRows && j + y < numCols){
+                        score += (image[ (i+x) * numCols +  j+y] == mask[x * maskCols + y]);
+                    }
+                }
+            }
+            score /= (maskRows * maskCols);
+            // Check if the score is above the confidence to add it to the list of possible
+            // locations of the mask.
+            if(score >= confidence){
+                pos.push_back(cv::Point(j + maskCols/2, i + maskRows/2));
+                j += maskCols;
+                flag = 1;
+            }
+            else j ++;
+        }
+        if(flag) i += maskRows;
+        else i++;
+    }
+}
+
+void match_symbol(unsigned char* image, vector<cv::Point> &symbol, map<string, cv::Mat> &dictionary, vector<pair<string, cv::Point>> &res, int staff_thickness, int staff_spacing, int numRows, int numCols){
+    double filled_confidence=0.8;
+    double empty_confidence=0.7;
+    double symbol_confidence=0.6;
+    
+    vector<pair<double, int> > scores;
+    vector<cv::Point> posv;
+    vector<string> names;
+    
+    cv::Mat mask;
+    double score; cv::Point pos;
+    
+    int index = 0;
+    for(auto &k : dictionary){
+        string name = k.first;
+        if(name == "filled_note" || name == "empty_note") continue;
+        mask = k.second;
+        
+        _match_and_slide(image, symbol, mask.data, numRows, numCols, mask.rows, mask.cols, score, pos, true);
+        scores.push_back(make_pair(score, index));
+        posv.push_back(pos);
+        names.push_back(name);
+        index++;
+    }
+    
+    sort(scores.begin(), scores.end());
+    if(scores.back().first >= symbol_confidence){
+        int idx = scores.back().second;
+        res.push_back(make_pair(names[idx], posv[idx]) );
+        return;
+    }
+    
+    mask = dictionary["empty_note"];
+    _match_and_slide(image, symbol, mask.data, numRows, numCols, mask.rows, mask.cols, score, pos, true);
+    
+    if(score >= empty_confidence){
+        res.push_back(make_pair("empty_note", pos));
+        return ;
+    }
+    
+    posv.clear();
+    mask = dictionary["filled_note"];
+    _match_all(image, symbol, mask.data, posv, numRows, numCols, mask.rows, mask.cols, filled_confidence);
+    
+    if(posv.size() == 1){
+        // recognize;
+        res.push_back(make_pair("quarter_note", pos));
+    }else{
+        for(auto pos : posv){
+            res.push_back(make_pair("half_note", pos));
+        }
+    }    
+}
+
+
 // ***************************************************************** CUDA KERNELS ****************************************************************** //
 
 // __global__ void colorToGrayscaleConversion(unsigned char* Pout, unsigned char* Pin, int width, int height, int numChannels)
@@ -366,6 +542,8 @@ int main()
     int target_staff_spacing;
     in >> target_staff_spacing;
     
+    map<string, cv::Mat> dictionary = load_dictionary();
+    
     for (size_t i=0; i<fn.size(); i++){
         cout << fn[i] << endl;
         cv::Mat raw_image = cv::imread(fn[i], cv::IMREAD_COLOR);
@@ -408,33 +586,51 @@ int main()
         
         // Start
         
-        cout << 1 << endl;
-        
         // Convert to grayscale and threshold
         to_grayscale_and_threshold(input_image, binary_image, image_height, image_width);
         
-        
-        cout << 2 << endl;
         // Compute staff parameters
         computeStaff(binary_image, staff_thickness, staff_spacing, image_height, image_width);        
         
         
         vector<vector<int> > staves;
         
-        cout << 3 << endl;
         // Locate staves
         find_staves(binary_image, staves, staff_thickness, staff_spacing, image_height, image_width);
         
         
-        cout << 4 << endl;
         // Remove staves
         for(auto &staff : staves){
-            draw_staff(image, staff, staff_thickness);
+//             draw_staff(image, staff, staff_thickness);
             remove_staff(binary_image, staff, staff_thickness, image_height, image_width);
         }
         
+        vector<vector<int>> track_bounds = segment_by_staves(image_height, staves, staff_thickness, staff_spacing);
         
+        vector<vector<cv::Point>> symbols;
         
+        for(int i = 0; i < staves.size(); i++){
+            vector<int> &track_bound = track_bounds[i];
+            
+            find_all_symbols(binary_image, symbols, track_bound[0], track_bound[1], staff_thickness, image_height, image_width);
+        }
+        
+        for(int i = 0; i < symbols.size(); i++){
+            cv::Point p1 = symbols[i][0];
+            cv::Point p2 = symbols[i][1];
+            cv::rectangle(image, p1, p2, cv::Scalar(0,255,0), 2);
+        }
+        
+        vector<pair<string, cv::Point> > res;
+        
+        for(int i = 0; i < symbols.size(); i++){
+            match_symbol(binary_image, symbols[i], dictionary, res, staff_thickness, staff_spacing, image_height, image_width);
+        }
+        
+        for(int i = 0; i < res.size(); i++){
+            cv::Point p1 = res[i].second;
+            cv::putText(image, res[i].first, p1, cv::FONT_HERSHEY_PLAIN, 0.8, cv::Scalar(0,0,255));
+        }
         
         scale(binary_image, 255, image_height, image_width);
         
