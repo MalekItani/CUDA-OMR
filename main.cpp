@@ -276,41 +276,41 @@ void computeRuns(unsigned char *image, int *dst, char axis, int numRows, int num
 	}
 }
 
-void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness, int staff_spacing, int numRows, int numCols) {
-    // For each staff line in a staff, given by its y position, remove the longest consecutive
+void remove_staff(unsigned char *image, vector<int> &staff, int staff_thickness, int staff_spacing,  int numRows, int numCols) {
+	// For each staff line in a staff, given by its y position, remove the longest consecutive
     // sequence of black pixels, if this sequence has a length below staff_thickness + 3.
     // This is so that symbols that are on the staff line don't get chopped.
     // In order to handle notes outside the staff, consider 3 additional imaginary staff lines
     // above and below the staff.
-
-	int* Iv = (int*)malloc(sizeof(int) * numRows * numCols);
+    int* Iv = (int*) malloc(sizeof(int) * numRows * numCols);
 	computeRuns(image, Iv, 'Y', numRows, numCols);
-
-    // Imaginary staff
-	vector<int> istaff;
-
-    // Add three lines above
-	for (int i = 0; i < 3; i++) {
-		if (staff[0] - i * (staff_spacing + staff_thickness) >= 0) istaff.push_back(staff[0] - i * (staff_spacing + staff_thickness));
-	}
-
-    // Add the staff lines
-	for (int i = 0; i < staff.size(); i++) istaff.push_back(staff[i]);
-
-    // Add three lines below
-	for (int i = 1; i <= 3; i++) if (staff.back() + i * (staff_spacing + staff_thickness) < numRows) istaff.push_back(staff.back() + i * (staff_spacing + staff_thickness));
-
-    // For each line in the imaginary staff, remove the run if it satisfies the above conditions.
+	
+	// Imaginary staff
+    vector<int> istaff;
+    
+	// Add three lines above
+    for(int i = 1; i <= 3; i++){
+        if(staff[0] - i*(staff_spacing + staff_thickness) >= 0) istaff.push_back(staff[0] - i * (staff_spacing + staff_thickness) );
+    }
+    
+	// Add the staff lines
+    for(int i = 0; i < staff.size(); i++) istaff.push_back(staff[i]);
+    
+	// Add three lines below
+    for(int i = 1; i <= 3; i++) if(staff.back() + i*(staff_spacing +staff_thickness) < numRows) istaff.push_back(staff.back() + i * (staff_spacing + staff_thickness) )  ;
+    
+	// For each line in the imaginary staff, remove the run if it satisfies the above conditions.
 	for (int i = 0; i < istaff.size(); i++) {
 		int x = istaff[i] + 1;
-		if (x >= numRows) continue;
-		bool flag = (i < 3 || i > 8);
+        bool flag = (i < 3 || i > 7);
 		for (int j = 0; j < numCols; j++) {
-			if (Iv[x * numCols + j] == 0) continue;
-
 			int x2 = x;
+            while(x2 < numRows && Iv[x2 * numCols + j] == 0 && (x2 - x) < staff_thickness/2) x2++;
+			
+            if(x2 >= numRows) continue;
+            
 			while (x2 < numRows && Iv[x2 * numCols + j]>0) x2++;
-			if (Iv[(x2 - 1) * numCols + j] <= (1 + flag) * staff_thickness + 3) {
+			if (Iv[ (x2 - 1) * numCols +  j] <= (1 + flag) * staff_thickness + 3) {
 				int x1 = x2 - Iv[(x2 - 1) * numCols + j];
 				while (x1 < x2) {
 					image[x1 * numCols + j] = 1;

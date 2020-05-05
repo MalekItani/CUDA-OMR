@@ -591,7 +591,7 @@ def my_test(path):
     t2 = time.time()
     print("Time taken to segment tracks by their staves: {} ms".format(1000*(t2 - t1)))
 
-    draw_projection_plots = 1
+    draw_projection_plots = 0
 
     all_symbols = []
 
@@ -616,11 +616,11 @@ def my_test(path):
         print("Recognizing symbol {} ...".format(i))
         characters = match_symbol(bin_img, symbol, dictionary, staff_thickness, staff_spacing)
 
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
+
         for (name, pos) in characters:
             cv2.putText(img, name, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255))
             note_sequences[track_id].append((name, pos))
-
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
     
     t2 = time.time()
     print("Time taken to find classify all symbols: {} ms".format(1000*(t2 - t1)))
@@ -696,7 +696,8 @@ def main():
     # my_test("src/samples.png")
     # my_test("src/half_note.png")
     # my_test("src/ode_to_joy.png")
-    my_test("src/bar_keysig.png")
+    # my_test("src/bar_keysig.png")
+    my_test("src/below_staff.png")
     # my_test("src/bass_clef.png")
     # my_test("src/three_bar.png")
 
