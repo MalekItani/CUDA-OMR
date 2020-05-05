@@ -20,18 +20,6 @@ def advance(n, n_step):
         i += 1
     return n
 
-# Ignore this.
-def classify(note, staff, clef='treble'):
-    """
-    note: Center of the note
-    staff: array of 5 points denoting the position of the lines of the staff
-    """
-    staff_width = np.mean([staff[x] - staff[x-1] for x in range(1, len(staff))])
-    note_increment = staff_width/2
-    n = 44
-    delta_n = int(round((staff[-1] - note[1])/note_increment))
-    return advance(n, delta_n)
-
 def classify2(note, staff, staff_thickness, staff_spacing):
     """
     note: Center of the note
@@ -167,7 +155,7 @@ def segment_by_staves(img, staves, staff_thickness, staff_spacing):
     track_bounds = []
     for staff in staves:
         # Consider two imaginary staff lines above and below to account for notes
-        # above and below the staff. (May need to increase this)
+        # above and below the staff.
         y1 = max(staff[0] - 3*(staff_thickness + staff_spacing), 0)
         y2 = min(staff[-1] + 3*(staff_thickness + staff_spacing), img.shape[0])
         track_bounds.append( (y1, y2) )

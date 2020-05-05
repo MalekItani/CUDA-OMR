@@ -57,6 +57,12 @@ _global_ void match_all(unsigned char* image, int numRows, int numCols, int* sym
 
 int sliding_window_argmax(vector<int>& a, int k)
 {
+	/*
+    Given a 1D array a, computes the index of maximum value of the sum of elements in
+    a window of size k this array.
+    This is done by first computing the partial sum of a, then taking the maximum value
+    or partial_sum_a[i+k] - partial_sum_a[i-1];
+    */
 	int cursum = 0, maxsum = 0, maxInd = k;
 	for (int i = 0; i < 2 * k + 1; i++)
 	{
@@ -78,9 +84,18 @@ int sliding_window_argmax(vector<int>& a, int k)
 
 vector<int> getprojection(unsigned char* image, int numRows, int numCols, char axis = 'X', int startx = 0, int starty = 0, int endx = -1, int endy = -1)
 {
+	/*
+    Returns the projection of an image (count of black pixels) from start to end along a specified axis.
+    We can also compute the projection for a specific subrectangle of the image by specifying startx, stary, endx, endy.
+    */
+   	// If the values for end or endy are not set, then we assume them to be the last column or last row in the image.
 	if (endx == -1 || endx >= numCols) endx = numCols - 1;
 	if (endy == -1 || endy >= numRows) endy = numRows - 1;
 
+	// Loop over the matrix, and if the projection is along X, then:
+    // result[i] = number of black pixels in (startx + i)-th column
+    // Loop over the matrix, and if the projection is along Y, then:
+    // result[i] = number of black pixels in (starty + i)-th row
 	vector<int> result;
 	if (axis == 'X') {
 		result.resize(endx - startx + 1, 0);
@@ -107,12 +122,23 @@ vector<int> getprojection(unsigned char* image, int numRows, int numCols, char a
 
 void computeStaff(unsigned char* image, int& staff_thickness, int& staff_spacing, int numRows, int numCols)
 {
+	/*
+    Extract staff parameters from input image.
+    Staff parameters are staff width and staff spacing.
+    This is done by creating a histogram of consecutive black an white pixels, and 
+    taking the lengths of black pixels which occur most as staff thickness, and lengths
+    of white pixels which occur most as staff spacing.
+    This algorithm is described in Optical Music Recognition using Projections.
+    */
+    // Initialize histograms
 	vector<int> whitehist(numRows + 1, 0);
 	vector<int> blackhist(numRows + 1, 0);
+	// Loop over columns
 	for (int j = 0; j < numCols; j++)
 	{
 		for (int i = 0; i < numRows; i++)
 		{
+			// Compute length of consecutive sequence of white pixels
 			int seqlen = 0;
 			while (i < numRows && image[i * numCols + j] > 0)
 			{
@@ -122,6 +148,7 @@ void computeStaff(unsigned char* image, int& staff_thickness, int& staff_spacing
 			{
 				whitehist[seqlen] += 1;
 			}
+			// Compute length of consecutive sequence of black pixels
 			seqlen = 0;
 			while (i < numRows && image[i * numCols + j] == 0)
 			{
@@ -139,12 +166,30 @@ void computeStaff(unsigned char* image, int& staff_thickness, int& staff_spacing
 
 void find_staves(unsigned char* image, vector<vector<int> >& staves, int staff_thickness, int staff_spacing, int numRows, int numCols)
 {
+	/*
+    Given a binary image I, locates the staves in the image.
+    A staff is a list of 5 staff y-positions.
+    */
 	vector<int> staff;
+
+	// Define the score[i] of a row i as the number of black pixels along all columns of all rows
+    // that are at most staff_thickness below row i. In other words, score[i] = number of black pixels
+    // in a submatrix whose top left corner is (0, i) and whose bottom right corner is (numRows-1, i+staff_thickness)
+    
+    // To get this array, we can simply take the partial sum of the Y projection, and then take
+    // score[i] = yproj[i+staff_thickness] - yproj[i-1]
+    // We don't actually compute this explicitly; computing yproj is enough, but when we use the
+    // score, we use it based on the above formula.
+
 	vector<int> score = getprojection(image, numRows, numCols, 'Y');
+	// Compute the partial sum (in place).
 	for (int i = 1; i < numRows; i++) {
 		score[i] = score[i] + score[i - 1];
 	}
 
+	// If a row has a staff line, then most of the pixels in the submatrix described above should be black.
+    // We put a cutoff at 80% (experimentally determined).
+    // One we find a staff line, we can jump by staff_spacing/2 to avoid duplicate detections.
 	double confidence = 0.8;
 	int threshold = numCols * staff_thickness;
 	int row = 1;
@@ -156,6 +201,8 @@ void find_staves(unsigned char* image, vector<vector<int> >& staves, int staff_t
 		else {
 			row++;
 		}
+		// Once 5 staff lines are found, then they form a staff.
+        // So add these to the result and reset.
 		if (staff.size() == 5) {
 			staves.push_back(staff);
 			staff.clear();
@@ -166,9 +213,15 @@ void find_staves(unsigned char* image, vector<vector<int> >& staves, int staff_t
 
 vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>>& staves, int staff_thickness, int staff_spacing)
 {
+	/*
+    Splits tracks by the staff positions.
+    Returns list of tracks, list of track y-offsets
+    */
 	vector<vector<int>> track_bounds;
 	for (int i = 0; i < staves.size(); i++)
 	{
+		// Consider three imaginary staff lines above and below to account for notes
+        // above and below the staff.
 		int y1 = max(staves[i][0] - 3 * (staff_thickness + staff_spacing), 0);
 		int y2 = min(staves[i][(int)staves[i].size() - 1] + 3 * (staff_thickness + staff_spacing), numRows);
 		track_bounds.push_back({ y1,y2 });
@@ -178,6 +231,9 @@ vector<vector<int>> segment_by_staves(int numRows, vector<vector<int>>& staves, 
 
 vector<vector<int>> get_interesting_intervals(vector<int>& proj, int threshold)
 {
+	/*
+    Returns a list of intervals where proj is greater than some threshold.
+    */
 	vector<vector<int>> boundaries;
 	int i = 0;
 	while (i < proj.size()) {
@@ -195,6 +251,10 @@ vector<vector<int>> get_interesting_intervals(vector<int>& proj, int threshold)
 }
 
 void find_all_symbols(unsigned char* image, vector<vector<cv::Point>>& symbols, int starty, int endy, int staff_thickness, int numRows, int numCols) {
+	/*
+    Returns bounding boxes over all symbols in the image.
+    Note that the coordinates are relative so be sure to add the y-offset for multitrack images.
+    */
 	vector<int>xproj = getprojection(image, numRows, numCols, 'X', 0, starty, -1, endy);
 
 	vector<vector<int>> vertical_boundaries = get_interesting_intervals(xproj, staff_thickness);
@@ -213,6 +273,12 @@ void find_all_symbols(unsigned char* image, vector<vector<cv::Point>>& symbols, 
 }
 
 void computeRuns(unsigned char* image, int* dst, char axis, int numRows, int numCols) {
+	/*
+    Given an input binary image I, computes an output image res, where
+    res[i, j] = longest run ending at this pixel.
+    A run is defined as a consecutive sequence of black pixels.
+    If I[i, j] = 1, i.e. represents a white pixel, then res[i, j] = 0
+    */
 	vector<vector<int>>res(numRows, vector<int>(numCols, 0));
 	if (axis == 'X') {
 		for (int i = 0; i < numRows; i++) {
@@ -246,19 +312,29 @@ void computeRuns(unsigned char* image, int* dst, char axis, int numRows, int num
 }
 
 void remove_staff(unsigned char* image, vector<int>& staff, int staff_thickness, int staff_spacing, int numRows, int numCols) {
+	// For each staff line in a staff, given by its y position, remove the longest consecutive
+    // sequence of black pixels, if this sequence has a length below staff_thickness + 3.
+    // This is so that symbols that are on the staff line don't get chopped.
+    // In order to handle notes outside the staff, consider 3 additional imaginary staff lines
+    // above and below the staff.
 	int* Iv = (int*)malloc(sizeof(int) * numRows * numCols);
 	computeRuns(image, Iv, 'Y', numRows, numCols);
 
+	// Imaginary staff
 	vector<int> istaff;
 
+	// Add three lines above
 	for (int i = 0; i < 3; i++) {
 		if (staff[0] - i * (staff_spacing + staff_thickness) >= 0) istaff.push_back(staff[0] - i * (staff_spacing + staff_thickness));
 	}
 
+	// Add the staff lines
 	for (int i = 0; i < staff.size(); i++) istaff.push_back(staff[i]);
 
+	// Add three lines below
 	for (int i = 1; i <= 3; i++) if (staff.back() + i * (staff_spacing + staff_thickness) < numRows) istaff.push_back(staff.back() + i * (staff_spacing + staff_thickness));
 
+	// For each line in the imaginary staff, remove the run if it satisfies the above conditions.
 	for (int i = 0; i < istaff.size(); i++) {
 		int x = istaff[i] + 1;
 		if (x >= numRows) continue;
@@ -281,6 +357,7 @@ void remove_staff(unsigned char* image, vector<int>& staff, int staff_thickness,
 }
 
 void scale(unsigned char* src, int k, int height, int width) {
+	// Multiplies all elements in the input array by a scalar.
 	for (int i = 0; i < height; i++) {
 		for (int j = 0; j < width; j++) {
 			int idx = i * width + j;
@@ -290,6 +367,7 @@ void scale(unsigned char* src, int k, int height, int width) {
 }
 
 void draw_staff(cv::Mat img, vector<int>& staff, int thickness = 1) {
+	// Draws the staff on the input image.
 	for (int y : staff) {
 		cv::line(img, cv::Point(0, y), cv::Point(img.cols - 1, y), cv::Scalar(0, 0, 255), thickness);
 	}
@@ -312,6 +390,8 @@ void to_grayscale_and_threshold(unsigned char* src, unsigned char* dst, int heig
 }
 
 map<string, cv::Mat> load_dictionary() {
+	// Reads all templates from templates/
+    // and puts them in a dictionary of templates.
 	map<string, cv::Mat> dictionary;
 
 	string filename = "templates/*.png";
@@ -507,12 +587,14 @@ void match_symbol(unsigned char* d_image, vector<cv::Point>& symbol, map<string,
 }
 
 int full_step(int n) {
+	// Advance a note by one full step according to music theory rules.
 	int note = (n - 1) % 12;
 	if (note == 2 || note == 7) return n + 1;
 	else return n + 2;
 }
 
 int advance(int n, int n_step) {
+	// Advance a note by n steps according to music theory rules.
 	int i = 0;
 	while (i < n_step) {
 		n = full_step(n);
@@ -522,6 +604,7 @@ int advance(int n, int n_step) {
 }
 
 int classify_note(cv::Point note, vector<int>& staff, int staff_thickness, int staff_spacing) {
+	// Converts a note from y-position to key index.
 	int note_increment = (staff_thickness + staff_spacing) / 2;
 	int n = 44;
 	int delta_n = int(round(((staff.back() + staff_thickness / 2) - note.y) / note_increment));
@@ -535,7 +618,8 @@ int main()
 	vector<cv::String> fn;
 	cv::glob(filename, fn, false);
 
-
+	// Load the configuration file that the templates were generated with, for specifics
+    // like required staff spacing in pixels, to know by how much to resize a given image.
 	ifstream in("templates/conf.txt");
 	char c; in >> c;
 	while (c != '=') {
@@ -544,10 +628,16 @@ int main()
 	int target_staff_spacing;
 	in >> target_staff_spacing;
 
+	// Load the dictionary of template masks.
 	map<string, cv::Mat> dictionary = load_dictionary();
 
+	// Loop over all images in src/
 	for (size_t i = 0; i < fn.size(); i++) {
 		cout << fn[i] << endl;
+
+		// Read the image, resize it, compute staff parameters.
+        // Adjust the parameters to match the parameters of the image that
+        // the templates used in order to be able to use template matching.
 		cv::Mat raw_image = cv::imread(fn[i], cv::IMREAD_COLOR);
 
 		int image_height = 400;
@@ -632,7 +722,8 @@ int main()
 
 		timer.Stop();
 		cout << "Time taken to remove all staves in image: " << setprecision(4) << fixed << timer.Elapsed() << "ms." << endl;
-
+		
+		// Find the y boundaries of each track from the staves.
 		vector<vector<int>> track_bounds = segment_by_staves(image_height, staves, staff_thickness, staff_spacing);
 
 		vector<vector<cv::Point>> symbols;
@@ -640,6 +731,7 @@ int main()
 
 		timer.Start();
 
+		// For each track, find all the symbols on this track.
 		for (int i = 0; i < staves.size(); i++) {
 			vector<int>& track_bound = track_bounds[i];
 			int x = symbols.size();
@@ -653,17 +745,21 @@ int main()
 		timer.Stop();
 		cout << "Time taken to bound all symbols with boxes: " << setprecision(4) << fixed << timer.Elapsed() << "ms." << endl;
 
+		// Draw bounding rectangles for each symbol.
 		for (int i = 0; i < symbols.size(); i++) {
 			cv::Point p1 = symbols[i][0];
 			cv::Point p2 = symbols[i][1];
 			cv::rectangle(image, p1, p2, cv::Scalar(0, 255, 0), 2);
 		}
-
+		
 		vector<pair<string, cv::Point> > res;
 		vector<vector<string>> char_sequence(staves.size());
 
 		timer.Start();
-
+		// Recognize each symbol, and encode it correspondingly in the output file.
+        // If the symbol is not a note, then output its name directly
+        // Otherwise, find the note's key index n, and then output it in the form
+        // "{note_type}.{n}"
 		for (int i = 0; i < symbols.size(); i++) {
 			int x = res.size();
 			match_symbol(d_binary_image, symbols[i], dictionary, res, staff_thickness, staff_spacing, image_height, image_width);
@@ -679,11 +775,13 @@ int main()
 		timer.Stop();
 		cout << "Time taken to classify all symbols: " << setprecision(4) << fixed << timer.Elapsed() << "ms." << endl;
 
+		// Display symbol names on image.
 		for (int i = 0; i < res.size(); i++) {
 			cv::Point p1 = res[i].second;
 			cv::putText(image, res[i].first, p1, cv::FONT_HERSHEY_PLAIN, 0.8, cv::Scalar(0, 0, 255));
 		}
 
+		// Write to output file and display images.
 		ofstream of("GPUout.txt"); // Make sure to verify output with out.txt
 		for (int t = 0; t < staves.size(); t++) {
 			of << "Track" << t << ": ";
