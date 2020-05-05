@@ -1,7 +1,8 @@
 # This is a CUDA Accelerated Optical Music Recognition system, a course project for EECE 696 (Applied Parallel Programming)
 
 This repository contains three main files. The python file was used for prototyping.
-Then, the Python code was re-writter in C++, and then parts of the code were accelerated using the CUDA API.
+Then, the Python code was re-written in C++, and then parts of the code were accelerated using the CUDA API.
+The CPU implementation is found in main.cpp and the CUDA implementation in main.cu.
 
 The tests folder contains a class to play output files using the mingus library (work in progress).
 
