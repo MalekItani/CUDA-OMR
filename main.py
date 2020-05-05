@@ -591,7 +591,7 @@ def my_test(path):
     t2 = time.time()
     print("Time taken to segment tracks by their staves: {} ms".format(1000*(t2 - t1)))
 
-    draw_projection_plots = 0
+    draw_projection_plots = 1
 
     all_symbols = []
 
