@@ -8,6 +8,9 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/opencv.hpp>
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include <stdio.h>
 
 
 #define THRESHOLD_VALUE 205
@@ -558,8 +561,44 @@ int classify_note(cv::Point note, vector<int> &staff, int staff_thickness, int s
 // 		output[y * (y2 - y1 + 1) + x] = tmp;
 // 	}
 // }
-
 // ********************************************************************** MAIN ****************************************************************** //
+
+vector<vector<int>> outputToVector(int* image, int numRows, int numCols) {
+    vector<vector<int>>res(numRows, vector<int>(numCols));
+    for (int i = 0; i < numRows; i++) {
+        for (int j = 0; j < numCols; j++) {
+            res[i][j] = image[i * numCols + j];
+        }
+    }
+    return res;
+}
+
+vector<vector<int>> callMatchAllKernel(unsigned char* d_image, int numRows, int numCols, vector<cv::point>symbol, unsigned char* mask, int mask_height, int mask_width) {
+    unsigned char* d_mask;
+    cudaMalloc((void**)&d_mask, sizeof(unsigned char) * mask_width * mask_height);
+    cudaMemcpy(d_mask, mask, sizeof(unsigned char) * mask_height * mask_width, cudaMemcpyHostToDevice);
+    int output_width = max(symbol[0].x + 1, symbol[1].x - mask_width);
+    int output_height = max(symbol[0].y + 1, symbol[1].y - mask_height);
+    int* symb = new int[4]();
+    symb[0] = symbol[0].x;
+    symb[1] = symbol[0].y;
+    symb[2] = symbol[1].x;
+    symb[3] = symbol[1].y;
+    int* d_symb;
+    cudaMalloc((void**)&d_symb, sizeof(int) * 4);
+    cudaMemcpy(d_symb, symb, sizeof(int) * 4, cudaMemcpyHostToDevice);
+    dim3 dimBlock(16, 16, 1);
+    dim3 DimGrid((output_width - 1) / 16 + 1, (output_height - 1) / 16 + 1, 1);
+    int* d_output;
+    cudaMalloc((void**)&d_output, sizeof(int) * output_width * output_height);
+    int* output = (int*)malloc(sizeof(int) * output_width * output_height);
+    match_all << <DimGrid, dimBlock >> > (d_image, numRows, numCols, d_symb, d_mask, mask_height, mask_width, d_output, output_width, output_height);
+    cudaMemcpy(output, d_output, sizeof(int) * output_width * output_height, cudaMemcpyDeviceToHost);
+    cudaFree(d_symb);
+    cudaFree(d_mask);
+    cudaFree(d_output);
+    return outputToVector(output, output_height, output_width);
+}
 
 
 int main()
