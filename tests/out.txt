@@ -1,2 +1,1 @@
-Track0: treble_clef half_rest 
-Track1: bass_clef dot dot eighth_note.44 eighth_rest eighth_note.44 eighth_note.47 eighth_note.44 eighth_rest eighth_note.44 
+Track0: half_note.44 dot quarter_note.44 quarter_note.44 
